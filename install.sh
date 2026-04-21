@@ -176,27 +176,35 @@ aur_install() {
     "$AUR_HELPER" -S --needed --noconfirm "${missing[@]}"
 }
 
-# Installs the Inter font, detecting package conflicts first.
-# ttf-inter conflicts with ttf-google-fonts-typewolf (which provides ttf-opensans).
-# If the conflicting package is present and the user hasn't forced a reinstall,
-# we skip and fall back to whatever sans-serif is available on the system.
+# Installs the Inter font via AUR, handling package conflicts gracefully.
+# ttf-inter conflicts with any package that provides the virtual ttf-opensans
+# (e.g. ttf-google-fonts-typewolf). Rather than hardcoding a package name,
+# we capture the AUR helper output silently and parse it for conflict errors.
 install_inter_font() {
     [[ -z "$AUR_HELPER" ]] && return 0
     pacman -Qi ttf-inter &>/dev/null && return 0  # already installed
 
-    # Detect known conflicting package
-    local conflict_pkg="ttf-google-fonts-typewolf"
-    if pacman -Qi "$conflict_pkg" &>/dev/null; then
-        warn "ttf-inter conflicts with '$conflict_pkg' (already installed)."
-        warn "To install Inter manually, first remove the conflict:"
-        warn "  sudo pacman -R $conflict_pkg && $AUR_HELPER -S ttf-inter"
-        warn "Falling back to system sans-serif font."
-        return 0
-    fi
-
     info "Installing AUR package: ttf-inter"
-    "$AUR_HELPER" -S --needed --noconfirm ttf-inter \
-        || warn "ttf-inter install failed — falling back to system sans-serif"
+    local output exit_code
+    output=$("$AUR_HELPER" -S --needed --noconfirm ttf-inter 2>&1) && return 0
+    exit_code=$?
+
+    if echo "$output" | grep -qi "conflict"; then
+        # Extract the conflicting package name from paru/yay output:
+        # ":: Conflicts found:\n    <pkg>: <reason>"
+        local conflict_detail
+        conflict_detail=$(echo "$output" \
+            | grep -A3 "Conflicts found" \
+            | grep -v "^::\|Conflicts found\|Conflicting" \
+            | head -1 | xargs)
+        warn "ttf-inter has a package conflict${conflict_detail:+: $conflict_detail}"
+        warn "To install Inter manually, resolve the conflict first:"
+        warn "  ${AUR_HELPER} -S ttf-inter  (interactive — choose which package to replace)"
+        warn "Falling back to system sans-serif font."
+    else
+        warn "ttf-inter install failed (exit $exit_code) — falling back to system sans-serif"
+        echo "$output" >&2
+    fi
 }
 
 # ── 1. System dependencies ────────────────────────────────────────────────────
