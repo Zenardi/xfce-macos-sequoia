@@ -16,6 +16,8 @@
 | **Fonts** | [Inter](https://rsms.me/inter/) (closest open-source to SF Pro) via AUR |
 | **Wallpaper** | macOS Sequoia (Light or Dark variant) |
 | **Dock** | [Plank](https://launchpad.net/plank) |
+| **Top Panel** | macOS-style menu bar (whiskermenu, statusnotifier, clock) |
+| **Login Screen** | LightDM — macOS wallpaper + WhiteSur GTK/icon theme |
 | **XFCE settings** | Applied via `xfconf-query` (theme, icons, cursors, compositor, panel) |
 
 ---
@@ -110,7 +112,7 @@ Exit code `0` = all checks passed. Exit code `1` = at least one check failed.
 
 ## What the installer does
 
-1. **Checks & installs system packages** — `git`, `curl`, `plank`, `gtk-engine-murrine`, `sassc`
+1. **Checks & installs system packages** — `git`, `curl`, `plank`, `gtk-engine-murrine`, `sassc`, `xfce4-whiskermenu-plugin`, `xfce4-statusnotifier-plugin`
 2. **Clones and installs WhiteSur GTK theme** into `~/.themes`
 3. **Clones and installs WhiteSur icon theme** into `~/.icons`
 4. **Clones and installs WhiteSur cursor theme** into `~/.icons`
@@ -121,8 +123,25 @@ Exit code `0` = all checks passed. Exit code `1` = at least one check failed.
    - GTK theme, icon theme, cursor theme, fonts
    - Window manager theme & left-side window buttons (macOS style)
    - Compositor enabled for smooth rendering
-   - Top panel resized to 28 px (macOS menu-bar style)
+   - Top panel configured as macOS menu bar (whiskermenu + statusnotifier + clock)
+   - Writes `xfce4-panel.xml` so only panel-1 (top bar) is listed — panel-2 (bottom taskbar) is hidden
 9. **Writes GTK-2 / GTK-3 / GTK-4 config files** for apps that don't respect xfconf
+10. **Themes the LightDM login screen** — copies wallpaper and WhiteSur theme/icons to system directories, writes greeter config
+
+---
+
+## Login Screen
+
+The installer automatically themes the **LightDM** greeter (both `lightdm-gtk-greeter` and `lightdm-slick-greeter` are supported). This step requires `sudo` for the following operations:
+
+- Copying the macOS Sequoia wallpaper to `/usr/share/backgrounds/macos-sequoia/`
+- Installing the WhiteSur GTK theme to `/usr/share/themes/` (so the greeter can read it)
+- Installing the WhiteSur icon theme to `/usr/share/icons/`
+- Writing `/etc/lightdm/lightdm-gtk-greeter.conf` (or `slick-greeter.conf`)
+
+The original greeter config is backed up to `<conf>.bak` before overwriting. The uninstaller restores the backup automatically.
+
+If `sudo` is unavailable or fails, the login screen step emits warnings and continues — it will not abort the installation.
 
 ---
 
@@ -148,7 +167,7 @@ xfce-macos-theme/
 └── README.md        # This file
 ```
 
-Theme assets and configs are downloaded/generated at runtime and live entirely inside your home directory — nothing is written outside `~` without `sudo` (only `sudo pacman` for packages).
+Theme assets and configs are downloaded/generated at runtime and live entirely inside your home directory — with the exception of the login screen step, which writes to `/etc/lightdm/`, `/usr/share/backgrounds/macos-sequoia/`, `/usr/share/themes/` and `/usr/share/icons/` using `sudo`.
 
 ---
 

@@ -215,7 +215,8 @@ install_dependencies() {
 
     # Official Arch/CachyOS repo packages
     # gtk-engine-murrine is AUR-only on Arch; sassc is needed by WhiteSur's install script
-    pacman_install git curl wget plank sassc glib2 xfconf
+    pacman_install git curl wget plank sassc glib2 xfconf \
+        xfce4-whiskermenu-plugin xfce4-statusnotifier-plugin
 
     # AUR packages (requires yay or paru)
     # gtk-engine-murrine provides GTK-2 engine support for legacy apps
@@ -604,9 +605,12 @@ reload_xfce_session() {
         disown
     fi
 
-    # Reload panel (picks up position / size changes)
+    # Stop panel then restart so it picks up the new xfce4-panel.xml config
     if command -v xfce4-panel &>/dev/null; then
-        xfce4-panel -r &>/dev/null & disown
+        xfce4-panel --quit 2>/dev/null || true
+        sleep 1
+        xfce4-panel &>/dev/null &
+        disown
     fi
 
     # Signal xfce4-desktop to redraw wallpaper
@@ -619,17 +623,104 @@ reload_xfce_session() {
 configure_xfce_panel() {
     info "Configuring XFCE panel (macOS menu-bar style)..."
 
-    # Panel 1 — top menu bar
-    xfconf-query -c xfce4-panel -p /panels/panel-1/position         -s "p=6;x=960;y=0" --create -t string
-    xfconf-query -c xfce4-panel -p /panels/panel-1/size             -s 28               --create -t uint
-    xfconf-query -c xfce4-panel -p /panels/panel-1/length           -s 100              --create -t uint
-    xfconf-query -c xfce4-panel -p /panels/panel-1/length-adjust    -s true             --create -t bool
-    xfconf-query -c xfce4-panel -p /panels/panel-1/position-locked  -s true             --create -t bool
-    xfconf-query -c xfce4-panel -p /panels/panel-1/enter-opacity    -s 95               --create -t uint
-    xfconf-query -c xfce4-panel -p /panels/panel-1/leave-opacity    -s 85               --create -t uint
+    local xfconf_dir="$HOME/.config/xfce4/xfconf/xfce-perchannel-xml"
+    local panel_conf_dir="$HOME/.config/xfce4/panel"
+    mkdir -p "$xfconf_dir" "$panel_conf_dir"
 
-    # Autohide the bottom taskbar panel if it exists (panel-2)
-    xfconf-query -c xfce4-panel -p /panels/panel-2/autohide-behavior -s 1 --create -t uint 2>/dev/null || true
+    # Write complete xfce4-panel.xml with only panel-1 (top menu bar).
+    # Panel-2 (bottom taskbar) is deliberately omitted from the panels array.
+    cat > "$xfconf_dir/xfce4-panel.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-panel" version="1.0">
+  <property name="configver" type="int" value="2"/>
+  <property name="panels" type="array">
+    <value type="int" value="1"/>
+  </property>
+  <property name="panels" type="empty">
+    <property name="panel-1" type="empty">
+      <property name="autohide-behavior" type="uint" value="0"/>
+      <property name="position" type="string" value="p=6;x=0;y=0"/>
+      <property name="size" type="uint" value="28"/>
+      <property name="nrows" type="uint" value="1"/>
+      <property name="length" type="uint" value="100"/>
+      <property name="length-adjust" type="bool" value="true"/>
+      <property name="position-locked" type="bool" value="true"/>
+      <property name="plugin-ids" type="array">
+        <value type="int" value="1"/>
+        <value type="int" value="2"/>
+        <value type="int" value="3"/>
+        <value type="int" value="4"/>
+        <value type="int" value="5"/>
+        <value type="int" value="6"/>
+        <value type="int" value="7"/>
+      </property>
+    </property>
+  </property>
+  <property name="plugins" type="empty">
+    <property name="plugin-1" type="string" value="whiskermenu">
+      <property name="show-button-title" type="bool" value="false"/>
+      <property name="show-button-icon" type="bool" value="true"/>
+      <property name="button-icon" type="string" value="start-here"/>
+    </property>
+    <property name="plugin-2" type="string" value="separator">
+      <property name="expand" type="bool" value="true"/>
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-3" type="string" value="statusnotifier"/>
+    <property name="plugin-4" type="string" value="separator">
+      <property name="expand" type="bool" value="false"/>
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-5" type="string" value="clock">
+      <property name="digital-format" type="string" value="%a %b %e  %I:%M %p"/>
+      <property name="mode" type="uint" value="2"/>
+      <property name="show-frame" type="bool" value="false"/>
+    </property>
+    <property name="plugin-6" type="string" value="separator">
+      <property name="expand" type="bool" value="false"/>
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-7" type="string" value="actions">
+      <property name="appearance" type="uint" value="0"/>
+      <property name="items" type="array">
+        <value type="string" value="-lock-screen"/>
+        <value type="string" value="+switch-user"/>
+        <value type="string" value="-separator"/>
+        <value type="string" value="+logout"/>
+        <value type="string" value="-restart"/>
+        <value type="string" value="+shutdown"/>
+      </property>
+    </property>
+  </property>
+</channel>
+EOF
+
+    # Write per-plugin RC files
+    cat > "$panel_conf_dir/whiskermenu-1.rc" <<'EOF'
+button-icon=start-here
+show-button-title=false
+show-button-icon=true
+profile=Default
+EOF
+
+    cat > "$panel_conf_dir/clock-5.rc" <<'EOF'
+digital-format=%a %b %e  %I:%M %p
+mode=2
+show-frame=false
+EOF
+
+    # Belt-and-suspenders: also set panel-2 to always-hide via xfconf-query
+    xfconf-query -c xfce4-panel -p /panels/panel-2/autohide-behavior \
+        -s 2 --create -t uint 2>/dev/null || true
+
+    # Also apply panel-1 properties live via xfconf-query
+    xfconf-query -c xfce4-panel -p /panels/panel-1/position        -s "p=6;x=0;y=0" --create -t string
+    xfconf-query -c xfce4-panel -p /panels/panel-1/size            -s 28             --create -t uint
+    xfconf-query -c xfce4-panel -p /panels/panel-1/length          -s 100            --create -t uint
+    xfconf-query -c xfce4-panel -p /panels/panel-1/length-adjust   -s true           --create -t bool
+    xfconf-query -c xfce4-panel -p /panels/panel-1/position-locked -s true           --create -t bool
+
+    info "xfce4-panel.xml and plugin RC files written"
 }
 
 # ── 9. GTK-2 compatibility ────────────────────────────────────────────────────
@@ -713,6 +804,102 @@ EOF
     success "GTK-2/3/4 config files written"
 }
 
+# ── 10. Login screen (LightDM) ────────────────────────────────────────────────
+configure_login_screen() {
+    step "Login screen (LightDM)"
+    # Idempotency: check if we've already configured it
+    local marker="/etc/lightdm/.xfce-macos-theme"
+    guard "login-screen" -f "$marker" || return 0
+
+    # Detect installed greeter
+    local greeter="lightdm-gtk-greeter"  # CachyOS XFCE default
+    if [[ -f /etc/lightdm/lightdm.conf ]]; then
+        local detected
+        detected=$(grep -Po '(?<=greeter-session=)\S+' /etc/lightdm/lightdm.conf 2>/dev/null || true)
+        [[ -n "$detected" ]] && greeter="$detected"
+    fi
+    # Also detect by which greeter binary is installed
+    [[ ! -f "/usr/bin/lightdm-gtk-greeter" ]] && \
+        [[ -f "/usr/bin/lightdm-slick-greeter" ]] && greeter="lightdm-slick-greeter"
+
+    info "Detected greeter: $greeter"
+
+    # Install greeter package if needed
+    case "$greeter" in
+        lightdm-gtk-greeter)   pacman_install lightdm-gtk-greeter ;;
+        lightdm-slick-greeter) pacman_install lightdm-slick-greeter ;;
+    esac
+
+    # Copy wallpaper to system-wide location (needs sudo)
+    local sys_wp_dir="/usr/share/backgrounds/macos-sequoia"
+    local sys_wp="$sys_wp_dir/sequoia-${VARIANT}.jpg"
+    if [[ -f "${WALLPAPER_PATH:-}" ]]; then
+        sudo mkdir -p "$sys_wp_dir" || warn "sudo mkdir failed for $sys_wp_dir"
+        sudo cp -f "$WALLPAPER_PATH" "$sys_wp" || warn "sudo cp wallpaper failed"
+    fi
+
+    # Install GTK theme system-wide so greeter can use it
+    local gtk_theme
+    [[ "$VARIANT" == "dark" ]] && gtk_theme="WhiteSur-Dark" || gtk_theme="WhiteSur-Light"
+    if [[ -d "$THEMES_DIR/$gtk_theme" ]] && [[ ! -d "/usr/share/themes/$gtk_theme" ]]; then
+        sudo cp -r "$THEMES_DIR/$gtk_theme" /usr/share/themes/ \
+            || warn "sudo cp GTK theme to /usr/share/themes/ failed"
+        info "Installed $gtk_theme to /usr/share/themes/"
+    fi
+
+    # Install icon theme system-wide
+    if [[ -d "$ICONS_DIR/WhiteSur" ]] && [[ ! -d "/usr/share/icons/WhiteSur" ]]; then
+        sudo cp -r "$ICONS_DIR/WhiteSur" /usr/share/icons/ \
+            || warn "sudo cp icons to /usr/share/icons/ failed"
+        info "Installed WhiteSur icons to /usr/share/icons/"
+    fi
+
+    # Write greeter config
+    local font_name="Inter Regular 13"
+    fc-list 2>/dev/null | grep -qi "Inter" || font_name="Sans Regular 13"
+
+    case "$greeter" in
+        lightdm-gtk-greeter)
+            local conf="/etc/lightdm/lightdm-gtk-greeter.conf"
+            sudo cp -n "$conf" "${conf}.bak" 2>/dev/null || true
+            sudo tee "$conf" > /dev/null <<EOF
+[greeter]
+background=$sys_wp
+theme-name=$gtk_theme
+icon-theme-name=WhiteSur
+font-name=$font_name
+cursor-theme-name=WhiteSur-cursors
+cursor-theme-size=24
+indicators=~host;~spacer;~clock;~spacer;~power
+clock-format=%a %b %-e  %I:%M %p
+position=50%,center 50%,center
+EOF
+            ;;
+        lightdm-slick-greeter)
+            local conf="/etc/lightdm/slick-greeter.conf"
+            sudo cp -n "$conf" "${conf}.bak" 2>/dev/null || true
+            sudo tee "$conf" > /dev/null <<EOF
+[Greeter]
+background=$sys_wp
+theme-name=$gtk_theme
+icon-theme-name=WhiteSur
+font-name=$font_name
+cursor-theme-name=WhiteSur-cursors
+cursor-theme-size=24
+EOF
+            ;;
+        *)
+            warn "Unsupported greeter: $greeter — skipping login screen config"
+            return 0
+            ;;
+    esac
+
+    # Leave a marker so we don't overwrite on subsequent runs
+    sudo touch "$marker" || warn "sudo touch $marker failed"
+    mark_installed "login-screen"
+    success "Login screen themed (greeter: $greeter)"
+}
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 print_summary() {
     echo
@@ -720,11 +907,13 @@ print_summary() {
     echo -e "${GREEN}  macOS ${VARIANT^} theme applied successfully!${RESET}"
     echo -e "${BOLD}════════════════════════════════════════${RESET}"
     echo
-    echo "  GTK Theme  : WhiteSur-${VARIANT^}"
-    echo "  Icons      : WhiteSur"
-    echo "  Cursors    : WhiteSur-cursors"
-    echo "  Dock       : Plank (autostart enabled)"
-    echo "  Wallpaper  : macOS Sequoia ${VARIANT^}"
+    echo "  GTK Theme    : WhiteSur-${VARIANT^}"
+    echo "  Icons        : WhiteSur"
+    echo "  Cursors      : WhiteSur-cursors"
+    echo "  Dock         : Plank (autostart enabled)"
+    echo "  Wallpaper    : macOS Sequoia ${VARIANT^}"
+    echo "  Top Panel    : macOS-style (whiskermenu, statusnotifier, clock)"
+    echo "  Login Screen : LightDM — macOS wallpaper + WhiteSur theme"
     echo
     echo -e "${YELLOW}  → Log out and back in (or run: xfce4-panel -r)${RESET}"
     echo -e "${YELLOW}    to fully apply panel and compositor changes.${RESET}"
@@ -757,6 +946,7 @@ main() {
     configure_plank
     apply_xfce_settings
     configure_gtk2
+    configure_login_screen
 
     print_summary
 }

@@ -121,6 +121,65 @@ restore_gtk_configs() {
     success "GTK config files removed"
 }
 
+restore_panel() {
+    step "Restoring default XFCE panel configuration"
+    local panel_xml="$HOME/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
+    if [[ -f "$panel_xml" ]]; then
+        run rm -f "$panel_xml"
+        success "Removed custom xfce4-panel.xml (XFCE will recreate defaults on next login)"
+    fi
+    run rm -f "$HOME/.config/xfce4/panel/whiskermenu-1.rc"
+    run rm -f "$HOME/.config/xfce4/panel/clock-5.rc"
+    success "Panel plugin RC files removed"
+}
+
+restore_login_screen() {
+    step "Restoring login screen (LightDM)"
+    local marker="/etc/lightdm/.xfce-macos-theme"
+
+    # Restore gtk-greeter config
+    local gtk_conf="/etc/lightdm/lightdm-gtk-greeter.conf"
+    if [[ -f "${gtk_conf}.bak" ]]; then
+        run sudo cp -f "${gtk_conf}.bak" "$gtk_conf"
+        run sudo rm -f "${gtk_conf}.bak"
+        success "Restored $gtk_conf from backup"
+    elif [[ -f "$gtk_conf" ]]; then
+        run sudo rm -f "$gtk_conf"
+        success "Removed $gtk_conf"
+    fi
+
+    # Restore slick-greeter config
+    local slick_conf="/etc/lightdm/slick-greeter.conf"
+    if [[ -f "${slick_conf}.bak" ]]; then
+        run sudo cp -f "${slick_conf}.bak" "$slick_conf"
+        run sudo rm -f "${slick_conf}.bak"
+        success "Restored $slick_conf from backup"
+    elif [[ -f "$slick_conf" ]]; then
+        run sudo rm -f "$slick_conf"
+        success "Removed $slick_conf"
+    fi
+
+    # Remove marker
+    [[ -f "$marker" ]] && run sudo rm -f "$marker"
+
+    # Remove system-wide wallpaper copy
+    [[ -d "/usr/share/backgrounds/macos-sequoia" ]] && \
+        run sudo rm -rf "/usr/share/backgrounds/macos-sequoia" && \
+        success "Removed /usr/share/backgrounds/macos-sequoia"
+
+    # Remove system-wide theme copies (only if we installed them)
+    for variant in Light Dark; do
+        [[ -d "/usr/share/themes/WhiteSur-$variant" ]] && \
+            run sudo rm -rf "/usr/share/themes/WhiteSur-$variant" && \
+            success "Removed /usr/share/themes/WhiteSur-$variant"
+    done
+
+    # Remove system-wide icon copy
+    [[ -d "/usr/share/icons/WhiteSur" ]] && \
+        run sudo rm -rf "/usr/share/icons/WhiteSur" && \
+        success "Removed /usr/share/icons/WhiteSur"
+}
+
 remove_state() {
     step "Clearing installation state"
     if [[ -f "$STATE_FILE" ]]; then
@@ -149,6 +208,8 @@ main() {
     remove_plank_autostart
     restore_xfce_settings
     restore_gtk_configs
+    restore_panel
+    restore_login_screen
     remove_state
 
     echo
