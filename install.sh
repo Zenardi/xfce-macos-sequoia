@@ -168,6 +168,29 @@ aur_install() {
     "$AUR_HELPER" -S --needed --noconfirm "${missing[@]}"
 }
 
+# Installs the Inter font, detecting package conflicts first.
+# ttf-inter conflicts with ttf-google-fonts-typewolf (which provides ttf-opensans).
+# If the conflicting package is present and the user hasn't forced a reinstall,
+# we skip and fall back to whatever sans-serif is available on the system.
+install_inter_font() {
+    [[ -z "$AUR_HELPER" ]] && return 0
+    pacman -Qi ttf-inter &>/dev/null && return 0  # already installed
+
+    # Detect known conflicting package
+    local conflict_pkg="ttf-google-fonts-typewolf"
+    if pacman -Qi "$conflict_pkg" &>/dev/null; then
+        warn "ttf-inter conflicts with '$conflict_pkg' (already installed)."
+        warn "To install Inter manually, first remove the conflict:"
+        warn "  sudo pacman -R $conflict_pkg && $AUR_HELPER -S ttf-inter"
+        warn "Falling back to system sans-serif font."
+        return 0
+    fi
+
+    info "Installing AUR package: ttf-inter"
+    "$AUR_HELPER" -S --needed --noconfirm ttf-inter \
+        || warn "ttf-inter install failed — falling back to system sans-serif"
+}
+
 # ── 1. System dependencies ────────────────────────────────────────────────────
 install_dependencies() {
     step "System dependencies"
@@ -180,7 +203,7 @@ install_dependencies() {
     # AUR packages (requires yay or paru)
     # gtk-engine-murrine provides GTK-2 engine support for legacy apps
     aur_install gtk-engine-murrine || warn "gtk-engine-murrine AUR install failed — GTK-2 apps may look unstyled"
-    aur_install ttf-inter           || warn "ttf-inter AUR install failed — falling back to system sans-serif"
+    install_inter_font
 
     mark_installed "dependencies"
     success "Dependencies ready"
@@ -196,11 +219,10 @@ install_gtk_theme() {
     git clone --depth=1 "$GTK_THEME_REPO" "$dest"
 
     mkdir -p "$THEMES_DIR"
-    # The installer script copies themes to ~/.themes
+    # --nautilus / --round are valid WhiteSur flags; Nautilus is omitted since XFCE uses Thunar
     bash "$dest/install.sh" \
         --dest "$THEMES_DIR" \
         --color "${VARIANT^}" \
-        --nautilus-style mojave \
         --round
 
     # Also install the GDM/login theme for completeness (optional, needs sudo)
