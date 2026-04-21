@@ -129,7 +129,8 @@ restore_panel() {
         success "Removed custom xfce4-panel.xml (XFCE will recreate defaults on next login)"
     fi
     run rm -f "$HOME/.config/xfce4/panel/whiskermenu-1.rc"
-    run rm -f "$HOME/.config/xfce4/panel/clock-5.rc"
+    run rm -f "$HOME/.config/xfce4/panel/clock-3.rc"
+    run rm -f "$HOME/.config/xfce4/panel/clock-5.rc"  # legacy name from older installs
     success "Panel plugin RC files removed"
 }
 

@@ -264,7 +264,7 @@ check_panel() {
     fi
 
     assert_file "$HOME/.config/xfce4/panel/whiskermenu-1.rc" "whiskermenu-1.rc"
-    assert_file "$HOME/.config/xfce4/panel/clock-5.rc"       "clock-5.rc"
+    assert_file "$HOME/.config/xfce4/panel/clock-3.rc"       "clock-3.rc"
 
     # Verify plugins are installed
     if pacman -Qi xfce4-whiskermenu-plugin &>/dev/null 2>&1; then

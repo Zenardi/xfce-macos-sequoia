@@ -54,9 +54,12 @@ GTK_THEME_REPO="https://github.com/vinceliuice/WhiteSur-gtk-theme.git"
 ICON_THEME_REPO="https://github.com/vinceliuice/WhiteSur-icon-theme.git"
 CURSOR_THEME_REPO="https://github.com/vinceliuice/WhiteSur-cursors.git"
 
-# macOS Sequoia wallpaper (public mirror)
-WALLPAPER_URL="https://github.com/dreamer-shan/macOS-Sequoia-Wallpapers/raw/main/Sequoia%20Light.jpg"
-WALLPAPER_DARK_URL="https://github.com/dreamer-shan/macOS-Sequoia-Wallpapers/raw/main/Sequoia%20Dark.jpg"
+# macOS Sonoma wallpaper — from vinceliuice/WhiteSur-wallpapers (verified working)
+WALLPAPER_URL="https://github.com/vinceliuice/WhiteSur-wallpapers/raw/main/4k/Sonoma-light.jpg"
+WALLPAPER_DARK_URL="https://github.com/vinceliuice/WhiteSur-wallpapers/raw/main/4k/Sonoma-dark.jpg"
+
+# Apple logo icon (from WhiteSur icon theme, used for whiskermenu button)
+APPLE_ICON_URL="https://raw.githubusercontent.com/vinceliuice/WhiteSur-icon-theme/master/src/places/scalable/start-here.svg"
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 parse_args() {
@@ -207,6 +210,28 @@ install_inter_font() {
     fi
 }
 
+# ── Apple logo icon ───────────────────────────────────────────────────────────
+# Downloads the WhiteSur start-here.svg (Apple logo) and installs it into the
+# hicolor icon theme so `start-here` resolves to the Apple mark system-wide.
+install_apple_icon() {
+    local icon_dir="$HOME/.local/share/icons/hicolor/scalable/places"
+    local icon_path="$icon_dir/start-here.svg"
+
+    # Skip if already installed and not forcing
+    if [[ -f "$icon_path" ]] && ! $FORCE; then
+        return 0
+    fi
+
+    mkdir -p "$icon_dir"
+    if curl -fsSL --retry 3 -o "$icon_path" "$APPLE_ICON_URL" 2>/dev/null; then
+        # Invalidate icon cache so GTK picks up the new icon immediately
+        gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+        success "Apple logo icon installed: $icon_path"
+    else
+        warn "Apple icon download failed — whiskermenu will use default start-here icon"
+    fi
+}
+
 # ── 1. System dependencies ────────────────────────────────────────────────────
 install_dependencies() {
     step "System dependencies"
@@ -216,12 +241,14 @@ install_dependencies() {
     # Official Arch/CachyOS repo packages
     # gtk-engine-murrine is AUR-only on Arch; sassc is needed by WhiteSur's install script
     pacman_install git curl wget plank sassc glib2 xfconf \
-        xfce4-whiskermenu-plugin xfce4-statusnotifier-plugin
+        xfce4-whiskermenu-plugin xfce4-statusnotifier-plugin \
+        xfce4-pulseaudio-plugin xfce4-power-manager network-manager-applet
 
     # AUR packages (requires yay or paru)
     # gtk-engine-murrine provides GTK-2 engine support for legacy apps
     aur_install gtk-engine-murrine || warn "gtk-engine-murrine AUR install failed — GTK-2 apps may look unstyled"
     install_inter_font
+    install_apple_icon
 
     mark_installed "dependencies"
     success "Dependencies ready"
@@ -507,7 +534,7 @@ apply_xfce_settings() {
             done < <(xrandr --listmonitors 2>/dev/null | awk 'NR>1{print $NF}' || true)
         fi
         # Always include common fallback names so the XML covers fresh sessions too
-        local all_monitors=("${detected_monitors[@]}" "Virtual1" "monitor0" "HDMI-1" "eDP-1")
+        local all_monitors=("${detected_monitors[@]}" "Virtual1" "monitor0" "HDMI-1" "eDP-1" "eDP-2" "HDMI-A-1" "DP-1")
 
         # Update any already-existing last-image properties (handles custom paths)
         while IFS= read -r screen_prop; do
@@ -596,13 +623,23 @@ EOF
 EOF
 
     # Write wallpaper + desktop-icon settings
+    # Detect monitors for the XML (same logic as xfconf-query wallpaper section)
+    local xml_monitors=()
+    if command -v xrandr &>/dev/null && [[ -n "${DISPLAY:-}" ]]; then
+        while IFS= read -r mon; do
+            xml_monitors+=("$mon")
+        done < <(xrandr --listmonitors 2>/dev/null | awk 'NR>1{print $NF}' || true)
+    fi
+    # Always include fallbacks so the file works even without a live display
+    xml_monitors+=("Virtual1" "monitor0" "HDMI-1" "eDP-1" "eDP-2" "HDMI-A-1" "DP-1")
+
     {
         echo '<?xml version="1.0" encoding="UTF-8"?>'
         echo '<channel name="xfce4-desktop" version="1.0">'
         if [[ -n "${WALLPAPER_PATH:-}" && -f "${WALLPAPER_PATH:-}" ]]; then
             echo '  <property name="backdrop" type="empty">'
             echo '    <property name="screen0" type="empty">'
-            for mon in Virtual1 monitor0 HDMI-1 eDP-1; do
+            for mon in "${xml_monitors[@]}"; do
                 echo "      <property name=\"monitor${mon}\" type=\"empty\">"
                 echo '        <property name="workspace0" type="empty">'
                 echo "          <property name=\"last-image\" type=\"string\" value=\"${WALLPAPER_PATH}\"/>"
@@ -644,9 +681,12 @@ reload_xfce_session() {
         disown
     fi
 
-    # Signal xfce4-desktop to redraw wallpaper
+    # Kill xfdesktop and restart — --reload doesn't always pick up wallpaper changes
     if command -v xfdesktop &>/dev/null; then
-        xfdesktop --reload &>/dev/null & disown 2>/dev/null || true
+        pkill -x xfdesktop 2>/dev/null || true
+        sleep 0.5
+        xfdesktop &>/dev/null &
+        disown
     fi
 }
 
@@ -660,6 +700,10 @@ configure_xfce_panel() {
 
     # Write complete xfce4-panel.xml with only panel-1 (top menu bar).
     # Panel-2 (bottom taskbar) is deliberately omitted from the panels array.
+    #
+    # macOS menu bar layout (left → right):
+    #   [Apple/whiskermenu] [──expand──] [clock (centered)] [──expand──]
+    #   [pulseaudio] [power-manager] [statusnotifier] [notification-area] [actions]
     cat > "$xfconf_dir/xfce4-panel.xml" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfce4-panel" version="1.0">
@@ -676,6 +720,14 @@ configure_xfce_panel() {
       <property name="length" type="uint" value="100"/>
       <property name="length-adjust" type="bool" value="true"/>
       <property name="position-locked" type="bool" value="true"/>
+      <property name="background-style" type="uint" value="1"/>
+      <property name="background-rgba" type="array">
+        <value type="double" value="0.1"/>
+        <value type="double" value="0.1"/>
+        <value type="double" value="0.1"/>
+        <value type="double" value="0.82"/>
+      </property>
+      <property name="icon-size" type="uint" value="16"/>
       <property name="plugin-ids" type="array">
         <value type="int" value="1"/>
         <value type="int" value="2"/>
@@ -684,34 +736,57 @@ configure_xfce_panel() {
         <value type="int" value="5"/>
         <value type="int" value="6"/>
         <value type="int" value="7"/>
+        <value type="int" value="8"/>
+        <value type="int" value="9"/>
+        <value type="int" value="10"/>
       </property>
     </property>
   </property>
   <property name="plugins" type="empty">
+    <!-- 1: Apple / Whisker Menu (far left) -->
     <property name="plugin-1" type="string" value="whiskermenu">
       <property name="show-button-title" type="bool" value="false"/>
       <property name="show-button-icon" type="bool" value="true"/>
       <property name="button-icon" type="string" value="start-here"/>
     </property>
+    <!-- 2: Expanding separator — pushes clock to center -->
     <property name="plugin-2" type="string" value="separator">
       <property name="expand" type="bool" value="true"/>
       <property name="style" type="uint" value="0"/>
     </property>
-    <property name="plugin-3" type="string" value="statusnotifier"/>
-    <property name="plugin-4" type="string" value="separator">
-      <property name="expand" type="bool" value="false"/>
-      <property name="style" type="uint" value="0"/>
-    </property>
-    <property name="plugin-5" type="string" value="clock">
-      <property name="digital-format" type="string" value="%a %b %e  %I:%M %p"/>
+    <!-- 3: Clock (centered) — macOS format: Mon Apr 21  2:35 PM -->
+    <property name="plugin-3" type="string" value="clock">
+      <property name="digital-format" type="string" value="%a %b %-e  %I:%M %p"/>
       <property name="mode" type="uint" value="2"/>
       <property name="show-frame" type="bool" value="false"/>
     </property>
-    <property name="plugin-6" type="string" value="separator">
+    <!-- 4: Expanding separator — pushes right-side items to far right -->
+    <property name="plugin-4" type="string" value="separator">
+      <property name="expand" type="bool" value="true"/>
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <!-- 5: Volume (PulseAudio / PipeWire) -->
+    <property name="plugin-5" type="string" value="pulseaudio">
+      <property name="enable-keyboard-shortcuts" type="bool" value="true"/>
+      <property name="show-notifications" type="bool" value="true"/>
+    </property>
+    <!-- 6: Battery / Power Manager -->
+    <property name="plugin-6" type="string" value="power-manager-plugin"/>
+    <!-- 7: Network Manager applet (via statusnotifier) -->
+    <property name="plugin-7" type="string" value="statusnotifier"/>
+    <!-- 8: Legacy notification area (X11 tray icons) -->
+    <property name="plugin-8" type="string" value="systray">
+      <property name="size-max" type="uint" value="22"/>
+      <property name="icon-size" type="uint" value="0"/>
+      <property name="square-icons" type="bool" value="true"/>
+    </property>
+    <!-- 9: Thin separator before actions -->
+    <property name="plugin-9" type="string" value="separator">
       <property name="expand" type="bool" value="false"/>
       <property name="style" type="uint" value="0"/>
     </property>
-    <property name="plugin-7" type="string" value="actions">
+    <!-- 10: Session actions (logout / shutdown) -->
+    <property name="plugin-10" type="string" value="actions">
       <property name="appearance" type="uint" value="0"/>
       <property name="items" type="array">
         <value type="string" value="-lock-screen"/>
@@ -727,15 +802,19 @@ configure_xfce_panel() {
 EOF
 
     # Write per-plugin RC files
+    # whiskermenu-1.rc: Apple logo, no title label
     cat > "$panel_conf_dir/whiskermenu-1.rc" <<'EOF'
 button-icon=start-here
 show-button-title=false
 show-button-icon=true
 profile=Default
+launcher-show-name=true
+launcher-show-description=false
 EOF
 
-    cat > "$panel_conf_dir/clock-5.rc" <<'EOF'
-digital-format=%a %b %e  %I:%M %p
+    # clock-3.rc: centered, macOS-style date+time
+    cat > "$panel_conf_dir/clock-3.rc" <<'EOF'
+digital-format=%a %b %-e  %I:%M %p
 mode=2
 show-frame=false
 EOF
@@ -750,6 +829,8 @@ EOF
     xfconf-query -c xfce4-panel -p /panels/panel-1/length          -s 100            --create -t uint
     xfconf-query -c xfce4-panel -p /panels/panel-1/length-adjust   -s true           --create -t bool
     xfconf-query -c xfce4-panel -p /panels/panel-1/position-locked -s true           --create -t bool
+    # Semi-transparent dark panel background (matches macOS menu bar)
+    xfconf-query -c xfce4-panel -p /panels/panel-1/background-style -s 1 --create -t uint 2>/dev/null || true
 
     info "xfce4-panel.xml and plugin RC files written"
 }
