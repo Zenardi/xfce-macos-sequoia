@@ -423,39 +423,36 @@ EOF
 # ── 8. XFCE settings via xfconf-query ────────────────────────────────────────
 apply_xfce_settings() {
     step "XFCE settings"
-    # xfconf-query --create is idempotent by nature; guard only skips in dry-run
-    # or when the theme is already correctly set.
+    $DRY_RUN && { info "[dry-run] Would apply XFCE settings"; return 0; }
+
     local expected_theme="WhiteSur-${VARIANT^}"
     local current_theme
     current_theme=$(xfconf-query -c xsettings -p /Net/ThemeName 2>/dev/null || true)
-    guard "xfce-settings" -n "${current_theme}" || return 0
-    [[ "$current_theme" == "$expected_theme" ]] && ! $FORCE && {
+
+    # Idempotency: only skip if the theme is ALREADY set to the expected value
+    if [[ "$current_theme" == "$expected_theme" ]] && ! $FORCE; then
         info "Already applied (skip): xfce-settings  [use --force to reapply]"
         mark_installed "xfce-settings"
         return 0
-    }
+    fi
 
-    # Backup current settings (only on first application)
+    # Backup current settings once (before any changes)
     if [[ ! -f "$BACKUP_DIR/xsettings.txt" ]]; then
         mkdir -p "$BACKUP_DIR"
-        xfconf-query -c xsettings    -l 2>/dev/null > "$BACKUP_DIR/xsettings.txt"    || true
-        xfconf-query -c xfwm4        -l 2>/dev/null > "$BACKUP_DIR/xfwm4.txt"        || true
+        xfconf-query -c xsettings     -l 2>/dev/null > "$BACKUP_DIR/xsettings.txt"     || true
+        xfconf-query -c xfwm4         -l 2>/dev/null > "$BACKUP_DIR/xfwm4.txt"         || true
         xfconf-query -c xfce4-desktop -l 2>/dev/null > "$BACKUP_DIR/xfce4-desktop.txt" || true
     fi
 
     local gtk_theme icon_theme font_name wm_theme cursor_theme
-
     if [[ "$VARIANT" == "dark" ]]; then
-        gtk_theme="WhiteSur-Dark"
-        wm_theme="WhiteSur-Dark"
+        gtk_theme="WhiteSur-Dark"; wm_theme="WhiteSur-Dark"
     else
-        gtk_theme="WhiteSur-Light"
-        wm_theme="WhiteSur-Light"
+        gtk_theme="WhiteSur-Light"; wm_theme="WhiteSur-Light"
     fi
     icon_theme="WhiteSur"
     cursor_theme="WhiteSur-cursors"
 
-    # Detect best available font
     if fc-list 2>/dev/null | grep -qi "Inter"; then
         font_name="Inter Regular 13"
     elif fc-list 2>/dev/null | grep -qi "SF Pro"; then
@@ -464,7 +461,7 @@ apply_xfce_settings() {
         font_name="Sans Regular 13"
     fi
 
-    info "Applying GTK theme: $gtk_theme"
+    info "Applying settings via xfconf-query..."
     xfconf-query -c xsettings -p /Net/ThemeName        -s "$gtk_theme"           --create -t string
     xfconf-query -c xsettings -p /Net/IconThemeName     -s "$icon_theme"          --create -t string
     xfconf-query -c xsettings -p /Gtk/CursorThemeName   -s "$cursor_theme"        --create -t string
@@ -476,20 +473,21 @@ apply_xfce_settings() {
     xfconf-query -c xsettings -p /Xft/HintStyle         -s "hintslight"           --create -t string
     xfconf-query -c xsettings -p /Xft/RGBA              -s "rgb"                  --create -t string
 
-    info "Applying window manager theme: $wm_theme"
-    xfconf-query -c xfwm4 -p /general/theme         -s "$wm_theme" --create -t string
-    xfconf-query -c xfwm4 -p /general/title_font    -s "$font_name" --create -t string
-    # macOS style: close/min/max buttons on the left
-    xfconf-query -c xfwm4 -p /general/button_layout -s "CMH|" --create -t string
+    xfconf-query -c xfwm4 -p /general/theme            -s "$wm_theme"  --create -t string
+    xfconf-query -c xfwm4 -p /general/title_font       -s "$font_name" --create -t string
+    xfconf-query -c xfwm4 -p /general/button_layout    -s "CMH|"       --create -t string
+    xfconf-query -c xfwm4 -p /general/use_compositing  -s true         --create -t bool
+    xfconf-query -c xfwm4 -p /general/frame_opacity    -s 85           --create -t int
+    xfconf-query -c xfwm4 -p /general/inactive_opacity -s 95           --create -t int
 
-    # Wallpaper — iterate over all monitors and workspaces
+    # Wallpaper — set on every known monitor/workspace property path
     if [[ -n "${WALLPAPER_PATH:-}" && -f "${WALLPAPER_PATH:-}" ]]; then
         info "Setting wallpaper: $WALLPAPER_PATH"
         local screen_prop
         for screen_prop in $(xfconf-query -c xfce4-desktop -l 2>/dev/null | grep "last-image" || true); do
-            xfconf-query -c xfce4-desktop -p "$screen_prop" -s "$WALLPAPER_PATH" --create -t string
+            xfconf-query -c xfce4-desktop -p "$screen_prop" \
+                -s "$WALLPAPER_PATH" --create -t string
         done
-        # Common monitor property paths
         for monitor_path in \
             /backdrop/screen0/monitorVirtual1/workspace0/last-image \
             /backdrop/screen0/monitor0/workspace0/last-image \
@@ -499,15 +497,114 @@ apply_xfce_settings() {
         done
     fi
 
-    # Compositor — enable for smooth macOS feel
-    xfconf-query -c xfwm4 -p /general/use_compositing -s true --create -t bool
-    xfconf-query -c xfwm4 -p /general/frame_opacity   -s 85   --create -t int
-    xfconf-query -c xfwm4 -p /general/inactive_opacity -s 95  --create -t int
-
     configure_xfce_panel
+
+    # Write XML channel files directly as a reliable on-disk fallback.
+    # xfconf-query talks to xfconfd via DBUS (live updates), but the XML files
+    # are what XFCE reads on next login. Writing both guarantees persistence.
+    write_xfce_xml_settings "$gtk_theme" "$wm_theme" "$icon_theme" \
+                             "$cursor_theme" "$font_name"
+
+    # Signal running XFCE daemons to reload without requiring a full logout
+    reload_xfce_session
 
     mark_installed "xfce-settings"
     success "XFCE settings applied"
+}
+
+# Writes XFCE XML channel config files directly so settings survive the next
+# login even if xfconfd was not reachable during the install run.
+write_xfce_xml_settings() {
+    local gtk_theme="$1" wm_theme="$2" icon_theme="$3"
+    local cursor_theme="$4" font_name="$5"
+    local xfconf_dir="$HOME/.config/xfce4/xfconf/xfce-perchannel-xml"
+    mkdir -p "$xfconf_dir"
+
+    info "Writing XFCE XML channel files for persistence..."
+
+    cat > "$xfconf_dir/xsettings.xml" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xsettings" version="1.0">
+  <property name="Net" type="empty">
+    <property name="ThemeName" type="string" value="$gtk_theme"/>
+    <property name="IconThemeName" type="string" value="$icon_theme"/>
+  </property>
+  <property name="Gtk" type="empty">
+    <property name="CursorThemeName" type="string" value="$cursor_theme"/>
+    <property name="CursorThemeSize" type="int" value="24"/>
+    <property name="FontName" type="string" value="$font_name"/>
+    <property name="MonospaceFontName" type="string" value="Monospace Regular 12"/>
+  </property>
+  <property name="Xft" type="empty">
+    <property name="Antialias" type="int" value="1"/>
+    <property name="Hinting" type="int" value="1"/>
+    <property name="HintStyle" type="string" value="hintslight"/>
+    <property name="RGBA" type="string" value="rgb"/>
+  </property>
+</channel>
+EOF
+
+    cat > "$xfconf_dir/xfwm4.xml" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="$wm_theme"/>
+    <property name="title_font" type="string" value="$font_name"/>
+    <property name="button_layout" type="string" value="CMH|"/>
+    <property name="use_compositing" type="bool" value="true"/>
+    <property name="frame_opacity" type="int" value="85"/>
+    <property name="inactive_opacity" type="int" value="95"/>
+  </property>
+</channel>
+EOF
+
+    # Write wallpaper setting if available
+    if [[ -n "${WALLPAPER_PATH:-}" && -f "${WALLPAPER_PATH:-}" ]]; then
+        cat > "$xfconf_dir/xfce4-desktop.xml" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-desktop" version="1.0">
+  <property name="backdrop" type="empty">
+    <property name="screen0" type="empty">
+      <property name="monitor0" type="empty">
+        <property name="workspace0" type="empty">
+          <property name="last-image" type="string" value="$WALLPAPER_PATH"/>
+          <property name="image-style" type="int" value="5"/>
+        </property>
+      </property>
+      <property name="monitorVirtual1" type="empty">
+        <property name="workspace0" type="empty">
+          <property name="last-image" type="string" value="$WALLPAPER_PATH"/>
+          <property name="image-style" type="int" value="5"/>
+        </property>
+      </property>
+    </property>
+  </property>
+</channel>
+EOF
+    fi
+}
+
+# Signal running XFCE session daemons to reload configuration without logout.
+reload_xfce_session() {
+    info "Signalling XFCE daemons to reload..."
+
+    # Restart xfsettingsd — picks up GTK theme, fonts, cursor, DPI changes
+    if command -v xfsettingsd &>/dev/null; then
+        pkill -x xfsettingsd 2>/dev/null || true
+        sleep 0.5
+        xfsettingsd --no-daemon &>/dev/null &
+        disown
+    fi
+
+    # Reload panel (picks up position / size changes)
+    if command -v xfce4-panel &>/dev/null; then
+        xfce4-panel -r &>/dev/null & disown
+    fi
+
+    # Signal xfce4-desktop to redraw wallpaper
+    if command -v xfdesktop &>/dev/null; then
+        xfdesktop --reload &>/dev/null & disown 2>/dev/null || true
+    fi
 }
 
 # ── 8a. XFCE Panel (macOS menu-bar style) ─────────────────────────────────────
