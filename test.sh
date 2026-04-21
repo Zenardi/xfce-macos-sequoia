@@ -238,6 +238,87 @@ check_fonts() {
     fi
 }
 
+check_panel() {
+    section "XFCE panel (macOS layout)"
+    local xfconf_dir="$HOME/.config/xfce4/xfconf/xfce-perchannel-xml"
+    assert_file "$xfconf_dir/xfce4-panel.xml" "xfce4-panel.xml"
+
+    # Verify the XML removes panel-2 (only panel-1 listed)
+    if [[ -f "$xfconf_dir/xfce4-panel.xml" ]]; then
+        if grep -q 'value="1"' "$xfconf_dir/xfce4-panel.xml" && \
+           ! grep -q 'panel-2' "$xfconf_dir/xfce4-panel.xml"; then
+            pass "Panel XML: only panel-1 defined (bottom taskbar removed)"
+        else
+            warn_check "Panel XML may still reference panel-2"
+        fi
+        if grep -q 'whiskermenu' "$xfconf_dir/xfce4-panel.xml"; then
+            pass "Panel XML: whiskermenu plugin defined"
+        else
+            fail "Panel XML: whiskermenu plugin NOT found"
+        fi
+        if grep -q 'statusnotifier' "$xfconf_dir/xfce4-panel.xml"; then
+            pass "Panel XML: statusnotifier plugin defined"
+        else
+            fail "Panel XML: statusnotifier plugin NOT found"
+        fi
+    fi
+
+    assert_file "$HOME/.config/xfce4/panel/whiskermenu-1.rc" "whiskermenu-1.rc"
+    assert_file "$HOME/.config/xfce4/panel/clock-5.rc"       "clock-5.rc"
+
+    # Verify plugins are installed
+    if pacman -Qi xfce4-whiskermenu-plugin &>/dev/null 2>&1; then
+        pass "Package installed: xfce4-whiskermenu-plugin"
+    else
+        fail "Package NOT installed: xfce4-whiskermenu-plugin"
+    fi
+    if pacman -Qi xfce4-statusnotifier-plugin &>/dev/null 2>&1; then
+        pass "Package installed: xfce4-statusnotifier-plugin"
+    else
+        fail "Package NOT installed: xfce4-statusnotifier-plugin"
+    fi
+}
+
+check_login_screen() {
+    section "Login screen (LightDM)"
+    local marker="/etc/lightdm/.xfce-macos-theme"
+    if [[ -f "$marker" ]]; then
+        pass "Login screen marker present (configure_login_screen ran)"
+    else
+        warn_check "Login screen not configured yet (run ./install.sh)"
+        return 0
+    fi
+
+    # Check whichever greeter config was written
+    if [[ -f /etc/lightdm/lightdm-gtk-greeter.conf ]]; then
+        if grep -q "WhiteSur" /etc/lightdm/lightdm-gtk-greeter.conf 2>/dev/null; then
+            pass "lightdm-gtk-greeter.conf references WhiteSur theme"
+        else
+            fail "lightdm-gtk-greeter.conf does not reference WhiteSur"
+        fi
+        if grep -q "macos-sequoia" /etc/lightdm/lightdm-gtk-greeter.conf 2>/dev/null; then
+            pass "lightdm-gtk-greeter.conf references macOS wallpaper"
+        else
+            warn_check "lightdm-gtk-greeter.conf: wallpaper path not found"
+        fi
+    elif [[ -f /etc/lightdm/slick-greeter.conf ]]; then
+        if grep -q "WhiteSur" /etc/lightdm/slick-greeter.conf 2>/dev/null; then
+            pass "slick-greeter.conf references WhiteSur theme"
+        else
+            fail "slick-greeter.conf does not reference WhiteSur"
+        fi
+    else
+        warn_check "No greeter config found in /etc/lightdm/"
+    fi
+
+    if [[ -d /usr/share/backgrounds/macos-sequoia ]]; then
+        pass "System wallpaper dir: /usr/share/backgrounds/macos-sequoia"
+    else
+        warn_check "System wallpaper not copied yet"
+    fi
+}
+
+
 check_state_file() {
     section "Installation state"
     local state="$HOME/.local/share/xfce-macos-theme/.installed"
@@ -267,6 +348,8 @@ main() {
     check_cursors
     check_wallpaper
     check_plank
+    check_panel
+    check_login_screen
     check_xfce_settings
     check_gtk_config_files
     check_fonts

@@ -160,24 +160,29 @@ restore_login_screen() {
     fi
 
     # Remove marker
-    [[ -f "$marker" ]] && run sudo rm -f "$marker"
+    if [[ -f "$marker" ]]; then
+        run sudo rm -f "$marker"
+    fi
 
     # Remove system-wide wallpaper copy
-    [[ -d "/usr/share/backgrounds/macos-sequoia" ]] && \
-        run sudo rm -rf "/usr/share/backgrounds/macos-sequoia" && \
+    if [[ -d "/usr/share/backgrounds/macos-sequoia" ]]; then
+        run sudo rm -rf "/usr/share/backgrounds/macos-sequoia"
         success "Removed /usr/share/backgrounds/macos-sequoia"
+    fi
 
     # Remove system-wide theme copies (only if we installed them)
     for variant in Light Dark; do
-        [[ -d "/usr/share/themes/WhiteSur-$variant" ]] && \
-            run sudo rm -rf "/usr/share/themes/WhiteSur-$variant" && \
+        if [[ -d "/usr/share/themes/WhiteSur-$variant" ]]; then
+            run sudo rm -rf "/usr/share/themes/WhiteSur-$variant"
             success "Removed /usr/share/themes/WhiteSur-$variant"
+        fi
     done
 
     # Remove system-wide icon copy
-    [[ -d "/usr/share/icons/WhiteSur" ]] && \
-        run sudo rm -rf "/usr/share/icons/WhiteSur" && \
+    if [[ -d "/usr/share/icons/WhiteSur" ]]; then
+        run sudo rm -rf "/usr/share/icons/WhiteSur"
         success "Removed /usr/share/icons/WhiteSur"
+    fi
 }
 
 remove_state() {
