@@ -242,7 +242,8 @@ install_dependencies() {
     # gtk-engine-murrine is AUR-only on Arch; sassc is needed by WhiteSur's install script
     pacman_install git curl wget plank sassc glib2 xfconf \
         xfce4-whiskermenu-plugin xfce4-statusnotifier-plugin \
-        xfce4-pulseaudio-plugin xfce4-power-manager network-manager-applet
+        xfce4-pulseaudio-plugin xfce4-power-manager network-manager-applet \
+        picom
 
     # AUR packages (requires yay or paru)
     # gtk-engine-murrine provides GTK-2 engine support for legacy apps
@@ -557,6 +558,10 @@ apply_xfce_settings() {
 
     configure_xfce_panel
 
+    # Show battery percentage label in the power-manager panel plugin
+    xfconf-query -c xfce4-power-manager \
+        -p /xfce4-power-manager/show-panel-label -s 1 --create -t int 2>/dev/null || true
+
     # Hide Trash (and Home) from the desktop — they live in the Plank dock
     xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-trash \
         -s false --create -t bool 2>/dev/null || true
@@ -701,9 +706,9 @@ configure_xfce_panel() {
     # Write complete xfce4-panel.xml with only panel-1 (top menu bar).
     # Panel-2 (bottom taskbar) is deliberately omitted from the panels array.
     #
-    # macOS menu bar layout (left → right):
+    # macOS menu bar layout (left → right) — 8 plugins, no logout button:
     #   [Apple/whiskermenu] [──expand──] [clock (centered)] [──expand──]
-    #   [pulseaudio] [power-manager] [statusnotifier] [notification-area] [actions]
+    #   [statusnotifier(Wi-Fi)] [pulseaudio(Vol)] [power-manager(Bat%)] [systray]
     cat > "$xfconf_dir/xfce4-panel.xml" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfce4-panel" version="1.0">
@@ -715,7 +720,7 @@ configure_xfce_panel() {
     <property name="panel-1" type="empty">
       <property name="autohide-behavior" type="uint" value="0"/>
       <property name="position" type="string" value="p=6;x=0;y=0"/>
-      <property name="size" type="uint" value="28"/>
+      <property name="size" type="uint" value="24"/>
       <property name="nrows" type="uint" value="1"/>
       <property name="length" type="uint" value="100"/>
       <property name="length-adjust" type="bool" value="true"/>
@@ -727,7 +732,7 @@ configure_xfce_panel() {
         <value type="double" value="0.1"/>
         <value type="double" value="0.82"/>
       </property>
-      <property name="icon-size" type="uint" value="16"/>
+      <property name="icon-size" type="uint" value="14"/>
       <property name="plugin-ids" type="array">
         <value type="int" value="1"/>
         <value type="int" value="2"/>
@@ -737,13 +742,11 @@ configure_xfce_panel() {
         <value type="int" value="6"/>
         <value type="int" value="7"/>
         <value type="int" value="8"/>
-        <value type="int" value="9"/>
-        <value type="int" value="10"/>
       </property>
     </property>
   </property>
   <property name="plugins" type="empty">
-    <!-- 1: Apple / Whisker Menu (far left) -->
+    <!-- 1: Apple / Whisker Menu (far left) — session actions inside the menu -->
     <property name="plugin-1" type="string" value="whiskermenu">
       <property name="show-button-title" type="bool" value="false"/>
       <property name="show-button-icon" type="bool" value="true"/>
@@ -765,44 +768,29 @@ configure_xfce_panel() {
       <property name="expand" type="bool" value="true"/>
       <property name="style" type="uint" value="0"/>
     </property>
-    <!-- 5: Volume (PulseAudio / PipeWire) -->
-    <property name="plugin-5" type="string" value="pulseaudio">
+    <!-- 5: StatusNotifier — Wi-Fi (nm-applet) + modern tray icons (macOS right side) -->
+    <property name="plugin-5" type="string" value="statusnotifier">
+      <property name="single-row" type="bool" value="true"/>
+      <property name="icon-size" type="int" value="14"/>
+    </property>
+    <!-- 6: Volume — PulseAudio / PipeWire -->
+    <property name="plugin-6" type="string" value="pulseaudio">
       <property name="enable-keyboard-shortcuts" type="bool" value="true"/>
       <property name="show-notifications" type="bool" value="true"/>
     </property>
-    <!-- 6: Battery / Power Manager -->
-    <property name="plugin-6" type="string" value="power-manager-plugin"/>
-    <!-- 7: Network Manager applet (via statusnotifier) -->
-    <property name="plugin-7" type="string" value="statusnotifier"/>
+    <!-- 7: Battery / Power Manager (shows percentage) -->
+    <property name="plugin-7" type="string" value="power-manager-plugin"/>
     <!-- 8: Legacy notification area (X11 tray icons) -->
     <property name="plugin-8" type="string" value="systray">
-      <property name="size-max" type="uint" value="22"/>
+      <property name="size-max" type="uint" value="20"/>
       <property name="icon-size" type="uint" value="0"/>
       <property name="square-icons" type="bool" value="true"/>
-    </property>
-    <!-- 9: Thin separator before actions -->
-    <property name="plugin-9" type="string" value="separator">
-      <property name="expand" type="bool" value="false"/>
-      <property name="style" type="uint" value="0"/>
-    </property>
-    <!-- 10: Session actions (logout / shutdown) -->
-    <property name="plugin-10" type="string" value="actions">
-      <property name="appearance" type="uint" value="0"/>
-      <property name="items" type="array">
-        <value type="string" value="-lock-screen"/>
-        <value type="string" value="+switch-user"/>
-        <value type="string" value="-separator"/>
-        <value type="string" value="+logout"/>
-        <value type="string" value="-restart"/>
-        <value type="string" value="+shutdown"/>
-      </property>
     </property>
   </property>
 </channel>
 EOF
 
-    # Write per-plugin RC files
-    # whiskermenu-1.rc: Apple logo, no title label
+    # whiskermenu-1.rc: Apple logo, no title, session actions visible in menu
     cat > "$panel_conf_dir/whiskermenu-1.rc" <<'EOF'
 button-icon=start-here
 show-button-title=false
@@ -810,6 +798,7 @@ show-button-icon=true
 profile=Default
 launcher-show-name=true
 launcher-show-description=false
+show-session-buttons=true
 EOF
 
     # clock-3.rc: centered, macOS-style date+time
@@ -825,12 +814,12 @@ EOF
 
     # Also apply panel-1 properties live via xfconf-query
     xfconf-query -c xfce4-panel -p /panels/panel-1/position        -s "p=6;x=0;y=0" --create -t string
-    xfconf-query -c xfce4-panel -p /panels/panel-1/size            -s 28             --create -t uint
+    xfconf-query -c xfce4-panel -p /panels/panel-1/size            -s 24             --create -t uint
     xfconf-query -c xfce4-panel -p /panels/panel-1/length          -s 100            --create -t uint
     xfconf-query -c xfce4-panel -p /panels/panel-1/length-adjust   -s true           --create -t bool
     xfconf-query -c xfce4-panel -p /panels/panel-1/position-locked -s true           --create -t bool
-    # Semi-transparent dark panel background (matches macOS menu bar)
-    xfconf-query -c xfce4-panel -p /panels/panel-1/background-style -s 1 --create -t uint 2>/dev/null || true
+    # Transparent panel background — picom will render the frosted-glass blur through it
+    xfconf-query -c xfce4-panel -p /panels/panel-1/background-style -s 0 --create -t uint 2>/dev/null || true
 
     info "xfce4-panel.xml and plugin RC files written"
 }
@@ -912,11 +901,150 @@ EOF
     mkdir -p "$gtk4_dir"
     cp "$gtk3_dir/settings.ini" "$gtk4_dir/settings.ini"
 
+    # GTK CSS: transparent panel background so picom frosted-glass blur shows through.
+    # Appended only if the rule is not already present (idempotent).
+    local gtk3_css="$gtk3_dir/gtk.css"
+    if ! grep -q "xfce4-panel.background" "$gtk3_css" 2>/dev/null; then
+        cat >> "$gtk3_css" <<'EOF'
+
+/* xfce-macos-theme: transparent panel so picom blur is visible */
+.xfce4-panel.background {
+    background-color: transparent;
+    background-image: none;
+}
+EOF
+    fi
+
     mark_installed "gtk2"
     success "GTK-2/3/4 config files written"
 }
 
-# ── 10. Login screen (LightDM) ────────────────────────────────────────────────
+# ── 10a. Picom compositor (frosted-glass menu bar) ────────────────────────────
+# Installs picom and configures it with dual_kawase blur so the panel appears
+# with the translucent frosted-glass effect seen on the macOS menu bar.
+configure_picom() {
+    step "Picom compositor (frosted-glass blur)"
+    local conf="$HOME/.config/picom.conf"
+    local autostart="$HOME/.config/autostart/picom.desktop"
+
+    guard "picom" -f "$conf" || return 0
+
+    mkdir -p "$(dirname "$conf")" "$HOME/.config/autostart"
+
+    cat > "$conf" <<'EOF'
+# picom.conf — generated by xfce-macos-theme
+# Provides the frosted-glass background blur visible through the transparent
+# XFCE panel, matching the macOS Sequoia menu-bar vibrancy effect.
+
+backend = "glx";
+vsync = true;
+
+# Blur — dual_kawase gives the closest approximation to macOS Core Image blur
+blur-background = true;
+blur-method = "dual_kawase";
+blur-strength = 8;
+blur-background-exclude = [
+    "window_type = 'tooltip'",
+    "class_g = 'slop'"
+];
+
+# Shadows (macOS-style soft window shadows)
+shadow = true;
+shadow-radius = 14;
+shadow-opacity = 0.35;
+shadow-offset-x = -7;
+shadow-offset-y = -7;
+shadow-exclude = [
+    "window_type = 'dock'",
+    "window_type = 'tooltip'",
+    "_GTK_FRAME_EXTENTS@:c"
+];
+
+# Opacity rules — make the panel semi-transparent so blur shows through
+opacity-rule = [
+    "85:class_g = 'Xfce4-panel'"
+];
+
+# Fading
+fading = true;
+fade-in-step = 0.028;
+fade-out-step = 0.03;
+fade-exclude = [];
+
+# Rounded corners (matches WhiteSur theme style)
+corner-radius = 8;
+rounded-corners-exclude = [
+    "window_type = 'dock'",
+    "window_type = 'tooltip'"
+];
+EOF
+
+    # Autostart entry — picom starts with every session
+    cat > "$autostart" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Picom Compositor
+Comment=Lightweight compositor with blur for macOS-style panel
+Exec=picom --config /home/USER/.config/picom.conf
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+EOF
+    # Replace the placeholder with the real home path
+    sed -i "s|/home/USER|$HOME|g" "$autostart"
+
+    # Start picom immediately if a display is available
+    if [[ -n "${DISPLAY:-}" ]]; then
+        # Kill any existing picom instance first
+        local picom_pid
+        picom_pid=$(pgrep -x picom | head -1 || true)
+        if [[ -n "$picom_pid" ]]; then
+            kill "$picom_pid" 2>/dev/null || true
+            sleep 0.5
+        fi
+        picom --config "$conf" --daemon 2>/dev/null || \
+            info "picom start deferred — will start on next login"
+    fi
+
+    mark_installed "picom"
+    success "Picom configured with frosted-glass blur"
+}
+
+# ── 10b. Autostart entries (nm-applet) ────────────────────────────────────────
+# Ensures nm-applet (Wi-Fi / network indicator) is running at login so the
+# StatusNotifier plugin in the panel shows the Wi-Fi icon on the right side,
+# matching the macOS menu bar network indicator.
+configure_autostart() {
+    step "Autostart entries (nm-applet)"
+    local nm_desktop="$HOME/.config/autostart/nm-applet.desktop"
+
+    guard "nm-applet-autostart" -f "$nm_desktop" || return 0
+
+    mkdir -p "$HOME/.config/autostart"
+
+    cat > "$nm_desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Network Manager Applet
+Comment=Network status indicator for XFCE panel
+Exec=nm-applet
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+EOF
+
+    # Start nm-applet in this session immediately if not already running
+    if [[ -n "${DISPLAY:-}" ]] && ! pgrep -x nm-applet &>/dev/null; then
+        nm-applet &
+        disown
+        info "nm-applet started for this session"
+    fi
+
+    mark_installed "nm-applet-autostart"
+    success "nm-applet autostart configured"
+}
+
+# ── 11. Login screen (LightDM) ────────────────────────────────────────────────
 configure_login_screen() {
     step "Login screen (LightDM)"
     # Idempotency: check if we've already configured it
@@ -1024,7 +1152,9 @@ print_summary() {
     echo "  Cursors      : WhiteSur-cursors"
     echo "  Dock         : Plank (autostart enabled)"
     echo "  Wallpaper    : macOS Sequoia ${VARIANT^}"
-    echo "  Top Panel    : macOS-style (whiskermenu, statusnotifier, clock)"
+    echo "  Top Panel    : macOS-style (24px, 8-plugin, frosted-glass)"
+    echo "  Compositor   : picom (dual_kawase blur + shadows)"
+    echo "  Wi-Fi tray   : nm-applet (autostart configured)"
     echo "  Login Screen : LightDM — macOS wallpaper + WhiteSur theme"
     echo
     echo -e "${YELLOW}  → Log out and back in (or run: xfce4-panel -r)${RESET}"
@@ -1058,6 +1188,8 @@ main() {
     configure_plank
     apply_xfce_settings
     configure_gtk2
+    configure_picom
+    configure_autostart
     configure_login_screen
 
     print_summary

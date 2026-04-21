@@ -132,6 +132,41 @@ restore_panel() {
     run rm -f "$HOME/.config/xfce4/panel/clock-3.rc"
     run rm -f "$HOME/.config/xfce4/panel/clock-5.rc"  # legacy name from older installs
     success "Panel plugin RC files removed"
+
+    # Remove transparent-panel GTK CSS rule (idempotent: no-op if not present)
+    local gtk3_css="$HOME/.config/gtk-3.0/gtk.css"
+    if [[ -f "$gtk3_css" ]] && grep -q "xfce4-panel.background" "$gtk3_css"; then
+        # Remove the comment + rule block added by xfce-macos-theme
+        run sed -i '/xfce-macos-theme: transparent panel/,/^}$/d' "$gtk3_css"
+        success "Removed transparent-panel GTK CSS rule"
+    fi
+}
+
+remove_picom_config() {
+    step "Removing picom configuration"
+    if [[ -f "$HOME/.config/autostart/picom.desktop" ]]; then
+        run rm -f "$HOME/.config/autostart/picom.desktop"
+        success "Removed picom autostart"
+    fi
+    if [[ -f "$HOME/.config/picom.conf" ]]; then
+        run rm -f "$HOME/.config/picom.conf"
+        success "Removed picom.conf"
+    fi
+    # Stop picom if running
+    local picom_pid
+    picom_pid=$(pgrep -x picom | head -1 || true)
+    if [[ -n "$picom_pid" ]]; then
+        kill "$picom_pid" 2>/dev/null || true
+        info "picom stopped"
+    fi
+}
+
+remove_nm_applet_autostart() {
+    step "Removing nm-applet autostart"
+    if [[ -f "$HOME/.config/autostart/nm-applet.desktop" ]]; then
+        run rm -f "$HOME/.config/autostart/nm-applet.desktop"
+        success "Removed nm-applet autostart"
+    fi
 }
 
 restore_login_screen() {
@@ -215,6 +250,8 @@ main() {
     restore_xfce_settings
     restore_gtk_configs
     restore_panel
+    remove_picom_config
+    remove_nm_applet_autostart
     restore_login_screen
     remove_state
 

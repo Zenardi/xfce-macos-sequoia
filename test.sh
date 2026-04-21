@@ -243,14 +243,16 @@ check_panel() {
     local xfconf_dir="$HOME/.config/xfce4/xfconf/xfce-perchannel-xml"
     assert_file "$xfconf_dir/xfce4-panel.xml" "xfce4-panel.xml"
 
-    # Verify the XML removes panel-2 (only panel-1 listed)
     if [[ -f "$xfconf_dir/xfce4-panel.xml" ]]; then
+        # Only panel-1 should exist (bottom taskbar removed)
         if grep -q 'value="1"' "$xfconf_dir/xfce4-panel.xml" && \
            ! grep -q 'panel-2' "$xfconf_dir/xfce4-panel.xml"; then
             pass "Panel XML: only panel-1 defined (bottom taskbar removed)"
         else
             warn_check "Panel XML may still reference panel-2"
         fi
+
+        # Verify key plugins present
         if grep -q 'whiskermenu' "$xfconf_dir/xfce4-panel.xml"; then
             pass "Panel XML: whiskermenu plugin defined"
         else
@@ -261,12 +263,50 @@ check_panel() {
         else
             fail "Panel XML: statusnotifier plugin NOT found"
         fi
+
+        # Actions plugin should be removed (session actions moved to whiskermenu)
+        if ! grep -q '"actions"' "$xfconf_dir/xfce4-panel.xml"; then
+            pass "Panel XML: actions plugin removed (macOS-style)"
+        else
+            warn_check "Panel XML: actions plugin still present — should be removed"
+        fi
+
+        # Panel height should be 24px (macOS menu bar height)
+        if grep -q 'name="size".*value="24"' "$xfconf_dir/xfce4-panel.xml"; then
+            pass "Panel XML: height is 24px (macOS menu bar size)"
+        else
+            warn_check "Panel XML: height may not be 24px"
+        fi
+
+        # Exactly 8 plugins
+        local plugin_count
+        plugin_count=$(grep -c '<value type="int"' "$xfconf_dir/xfce4-panel.xml" 2>/dev/null || echo "0")
+        # The panels array has 1 int, the plugin-ids array has 8 ints = 9 total int values
+        if [[ "$plugin_count" -eq 9 ]]; then
+            pass "Panel XML: 8 plugins (correct macOS layout)"
+        else
+            warn_check "Panel XML: expected 9 int values (1 panel + 8 plugins), got $plugin_count"
+        fi
     fi
 
     assert_file "$HOME/.config/xfce4/panel/whiskermenu-1.rc" "whiskermenu-1.rc"
     assert_file "$HOME/.config/xfce4/panel/clock-3.rc"       "clock-3.rc"
 
-    # Verify plugins are installed
+    # Session buttons must be in whiskermenu (not the panel actions plugin)
+    if grep -q "show-session-buttons=true" "$HOME/.config/xfce4/panel/whiskermenu-1.rc" 2>/dev/null; then
+        pass "whiskermenu-1.rc: session buttons enabled"
+    else
+        fail "whiskermenu-1.rc: show-session-buttons=true not set"
+    fi
+
+    # Transparent panel CSS for picom blur
+    if grep -q "xfce4-panel.background" "$HOME/.config/gtk-3.0/gtk.css" 2>/dev/null; then
+        pass "GTK CSS: transparent panel rule present"
+    else
+        warn_check "GTK CSS: transparent panel rule not found (picom blur may not show)"
+    fi
+
+    # Verify required packages are installed
     if pacman -Qi xfce4-whiskermenu-plugin &>/dev/null 2>&1; then
         pass "Package installed: xfce4-whiskermenu-plugin"
     else
@@ -276,6 +316,56 @@ check_panel() {
         pass "Package installed: xfce4-statusnotifier-plugin"
     else
         fail "Package NOT installed: xfce4-statusnotifier-plugin"
+    fi
+}
+
+check_picom() {
+    section "Picom compositor (frosted-glass blur)"
+    assert_file "$HOME/.config/picom.conf"                    "picom.conf"
+    assert_file "$HOME/.config/autostart/picom.desktop"       "picom autostart"
+
+    if [[ -f "$HOME/.config/picom.conf" ]]; then
+        if grep -q "dual_kawase" "$HOME/.config/picom.conf"; then
+            pass "picom.conf: dual_kawase blur configured"
+        else
+            fail "picom.conf: dual_kawase blur method not found"
+        fi
+        if grep -q "Xfce4-panel" "$HOME/.config/picom.conf"; then
+            pass "picom.conf: opacity rule for Xfce4-panel present"
+        else
+            warn_check "picom.conf: no opacity rule for Xfce4-panel"
+        fi
+    fi
+
+    if command -v picom &>/dev/null; then
+        pass "Command available: picom"
+    else
+        fail "Command not found: picom"
+    fi
+}
+
+check_autostart() {
+    section "Autostart entries"
+    assert_file "$HOME/.config/autostart/plank.desktop"       "Plank autostart"
+    assert_file "$HOME/.config/autostart/nm-applet.desktop"   "nm-applet autostart"
+    assert_file "$HOME/.config/autostart/picom.desktop"       "picom autostart"
+
+    if grep -q "nm-applet" "$HOME/.config/autostart/nm-applet.desktop" 2>/dev/null; then
+        pass "nm-applet.desktop: Exec line references nm-applet"
+    else
+        fail "nm-applet.desktop: Exec line missing"
+    fi
+}
+
+check_battery() {
+    section "Battery percentage display"
+    check_xfconf_available || return 0
+    local val
+    val=$(xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/show-panel-label 2>/dev/null || echo "__UNSET__")
+    if [[ "$val" == "1" ]]; then
+        pass "xfce4-power-manager: battery percentage enabled (show-panel-label=1)"
+    else
+        warn_check "xfce4-power-manager: battery percentage not set (got: '${val}')"
     fi
 }
 
@@ -349,6 +439,9 @@ main() {
     check_wallpaper
     check_plank
     check_panel
+    check_picom
+    check_autostart
+    check_battery
     check_login_screen
     check_xfce_settings
     check_gtk_config_files
