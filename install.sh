@@ -385,10 +385,18 @@ install_wallpaper() {
 configure_plank() {
     step "Plank dock"
     # Idempotency: skip if settings file already exists
-    guard "plank" -f "$HOME/.config/plank/dock1/settings" || return 0
-
-    # Write Plank preferences via dconf (if available) or direct config file
     local plank_conf_dir="$HOME/.config/plank/dock1"
+
+    # Idempotency: skip only if HideMode is already 0 (never hide) AND force not requested.
+    # Checking the actual setting rather than mere file existence ensures HideMode is
+    # always enforced even on re-runs over an existing Plank installation.
+    if ! $FORCE && grep -q "^HideMode=0" "$plank_conf_dir/settings" 2>/dev/null; then
+        info "Already applied (skip): plank  [use --force to reapply]"
+        mark_installed "plank"
+        return 0
+    fi
+    guard "plank" || return 0
+
     mkdir -p "$plank_conf_dir/launchers"
 
     # Plank settings file
@@ -398,28 +406,31 @@ configure_plank() {
 CurrentWorkspaceOnly=false
 #! The size of dock icons (in pixels).
 IconSize=48
-#! If 0, the dock is visible; if 1, it auto-hides; if 2, it intellihides.
+#! If 0, always visible; if 1, auto-hides; if 2, intellihides; if 3, window-dodge.
+#! HideMode=0 means Plank NEVER hides regardless of overlapping windows.
 HideMode=0
-#! Time to wait before hiding the dock.
+#! Time to wait before unhiding the dock (irrelevant when HideMode=0).
 UnhideDelay=0
-#! Time to wait before hiding the dock.
+#! Time to wait before hiding the dock (irrelevant when HideMode=0).
 HideDelay=300
-#! The monitor plug-in name that the dock should show on, or empty to use the primary monitor.
+#! The monitor plug-in name that the dock should show on, or empty for primary monitor.
 Monitor=
-#! List of themes to use.
+#! Dock theme.
 Theme=Transparent
-#! If true, the dock won't hide when it overlaps with an active window.
+#! If true, prevents items from being added or removed — must be false so running
+#! applications appear in the dock even when they are not pinned.
 LockItems=false
-#! The position for the dock on the monitor.
+#! The position for the dock on the monitor (3 = bottom).
 Position=3
-#! The alignment for the dock on its axis.
+#! The alignment for the dock on its axis (3 = center).
 Alignment=3
-#! The alignment of the items in the dock when they don't fill it.
+#! The alignment of the items in the dock when they don't fill it (3 = center).
 ItemsAlignment=3
-#! Whether to show an indicator for each open application.
+#! Whether to show a self-referencing dock item.
 ShowDockItem=false
-#! Whether to automatically pin items that the user docks.
-AutoPinning=true
+#! If true, dragging an app onto the dock permanently pins it.
+#! Running (non-pinned) apps always appear in the dock regardless of this setting.
+AutoPinning=false
 ZoomEnabled=true
 ZoomPercent=125
 EOF
@@ -919,7 +930,70 @@ EOF
     success "GTK-2/3/4 config files written"
 }
 
-# ── 10a. Picom compositor (frosted-glass menu bar) ────────────────────────────
+# ── 9b. Browser GTK theme integration ────────────────────────────────────────
+# Browsers (Firefox, Chromium) are often launched outside the XFCE session bus
+# and do not read xfconf settings. Exporting GTK_THEME as a real environment
+# variable is the only reliable way to force them to use the WhiteSur theme.
+# Also installs the WhiteSur Firefox chrome CSS for a macOS-style browser UI.
+configure_browser_theme() {
+    step "Browser GTK theme integration"
+    local marker="$HOME/.local/share/xfce-macos-theme/.browser-theme"
+    guard "browser-theme" -f "$marker" || return 0
+
+    local gtk_theme
+    [[ "$VARIANT" == "dark" ]] && gtk_theme="WhiteSur-Dark" || gtk_theme="WhiteSur-Light"
+
+    # ── 1. Export GTK_THEME in ~/.profile (login shell, picked up by app launchers)
+    local profile="$HOME/.profile"
+    touch "$profile"
+    if grep -q "^export GTK_THEME=" "$profile" 2>/dev/null; then
+        sed -i "s|^export GTK_THEME=.*|export GTK_THEME=\"$gtk_theme\"|" "$profile"
+    else
+        printf '\n# xfce-macos-theme: force GTK theme for browsers and non-XFCE apps\nexport GTK_THEME="%s"\n' "$gtk_theme" >> "$profile"
+    fi
+    info "GTK_THEME=$gtk_theme written to $profile"
+
+    # ── 2. systemd user environment (apps launched via D-Bus activation)
+    local env_dir="$HOME/.config/environment.d"
+    mkdir -p "$env_dir"
+    printf 'GTK_THEME=%s\n' "$gtk_theme" > "$env_dir/xfce-macos-gtk.conf"
+    info "GTK_THEME written to $env_dir/xfce-macos-gtk.conf"
+
+    # ── 3. WhiteSur Firefox chrome theme (macOS-style tab bar + window controls)
+    local gtk_theme_dir="$TMP_DIR/WhiteSur-gtk-theme"
+    if [[ ! -d "$gtk_theme_dir" ]]; then
+        info "Cloning WhiteSur GTK theme for Firefox tweaks..."
+        git clone --depth=1 "$GTK_THEME_REPO" "$gtk_theme_dir" 2>/dev/null || true
+    fi
+    if [[ -f "$gtk_theme_dir/tweaks.sh" ]]; then
+        if command -v firefox &>/dev/null || [[ -d "$HOME/.mozilla/firefox" ]]; then
+            info "Installing WhiteSur Firefox chrome theme..."
+            bash "$gtk_theme_dir/tweaks.sh" --color "${VARIANT^}" --firefox 2>/dev/null \
+                || warn "Firefox chrome theme install failed — run after first Firefox launch"
+        else
+            info "Firefox not found — skipping Firefox chrome theme"
+        fi
+    fi
+
+    # ── 4. Chromium / Chrome flags (force GTK3 rendering)
+    for flags_file in \
+        "$HOME/.config/chromium-flags.conf" \
+        "$HOME/.config/google-chrome-flags.conf" \
+        "$HOME/.config/chrome-flags.conf"; do
+        local app_dir
+        app_dir="$(dirname "$flags_file")"
+        # Only write if the browser config dir already exists (i.e. browser is installed)
+        if [[ -d "$app_dir" ]]; then
+            if ! grep -q "gtk-version" "$flags_file" 2>/dev/null; then
+                echo "--gtk-version=3" >> "$flags_file"
+                info "Added --gtk-version=3 to $flags_file"
+            fi
+        fi
+    done
+
+    mark_installed "browser-theme"
+    success "Browser GTK theme integration configured"
+}
 # Installs picom and configures it with dual_kawase blur so the panel appears
 # with the translucent frosted-glass effect seen on the macOS menu bar.
 configure_picom() {
@@ -1154,6 +1228,7 @@ print_summary() {
     echo "  Wallpaper    : macOS Sequoia ${VARIANT^}"
     echo "  Top Panel    : macOS-style (24px, 8-plugin, frosted-glass)"
     echo "  Compositor   : picom (dual_kawase blur + shadows)"
+    echo "  Browser      : GTK_THEME exported — Firefox chrome theme applied"
     echo "  Wi-Fi tray   : nm-applet (autostart configured)"
     echo "  Login Screen : LightDM — macOS wallpaper + WhiteSur theme"
     echo
@@ -1188,6 +1263,7 @@ main() {
     configure_plank
     apply_xfce_settings
     configure_gtk2
+    configure_browser_theme
     configure_picom
     configure_autostart
     configure_login_screen

@@ -169,6 +169,21 @@ remove_nm_applet_autostart() {
     fi
 }
 
+remove_browser_theme() {
+    step "Removing browser GTK theme integration"
+    # Strip GTK_THEME line from ~/.profile
+    local profile="$HOME/.profile"
+    if grep -q "GTK_THEME" "$profile" 2>/dev/null; then
+        run sed -i '/xfce-macos-theme: force GTK theme/d;/^export GTK_THEME=/d' "$profile"
+        success "Removed GTK_THEME from $profile"
+    fi
+    # Remove environment.d config
+    if [[ -f "$HOME/.config/environment.d/xfce-macos-gtk.conf" ]]; then
+        run rm -f "$HOME/.config/environment.d/xfce-macos-gtk.conf"
+        success "Removed environment.d GTK_THEME config"
+    fi
+}
+
 restore_login_screen() {
     step "Restoring login screen (LightDM)"
     local marker="/etc/lightdm/.xfce-macos-theme"
@@ -252,6 +267,7 @@ main() {
     restore_panel
     remove_picom_config
     remove_nm_applet_autostart
+    remove_browser_theme
     restore_login_screen
     remove_state
 

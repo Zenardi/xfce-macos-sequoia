@@ -369,6 +369,29 @@ check_battery() {
     fi
 }
 
+check_browser_theme() {
+    section "Browser GTK theme integration"
+    local profile="$HOME/.profile"
+    if grep -q "GTK_THEME" "$profile" 2>/dev/null; then
+        pass "\$HOME/.profile: GTK_THEME exported"
+        local val
+        val=$(grep "^export GTK_THEME=" "$profile" | head -1 | sed 's/export GTK_THEME=//' | tr -d '"')
+        if [[ "$val" == WhiteSur* ]]; then
+            pass "GTK_THEME references WhiteSur: $val"
+        else
+            warn_check "GTK_THEME value unexpected: $val"
+        fi
+    else
+        fail "\$HOME/.profile: GTK_THEME not set — browsers may ignore the GTK theme"
+    fi
+
+    if [[ -f "$HOME/.config/environment.d/xfce-macos-gtk.conf" ]]; then
+        pass "environment.d/xfce-macos-gtk.conf: GTK_THEME for systemd user session"
+    else
+        warn_check "environment.d/xfce-macos-gtk.conf not found"
+    fi
+}
+
 check_login_screen() {
     section "Login screen (LightDM)"
     local marker="/etc/lightdm/.xfce-macos-theme"
@@ -442,6 +465,7 @@ main() {
     check_picom
     check_autostart
     check_battery
+    check_browser_theme
     check_login_screen
     check_xfce_settings
     check_gtk_config_files
