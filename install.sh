@@ -127,7 +127,8 @@ detect_pkg_manager() {
     fi
 }
 
-# Installs one or more pacman packages (skips if already present)
+# Installs one or more official-repo packages (skips already-present ones).
+# Prints a warning and continues if a package is not found in the repos.
 pacman_install() {
     local pkgs=("$@")
     local missing=()
@@ -135,14 +136,26 @@ pacman_install() {
         pacman -Qi "$pkg" &>/dev/null || missing+=("$pkg")
     done
     [[ ${#missing[@]} -eq 0 ]] && return 0
-    info "Installing packages: ${missing[*]}"
-    sudo pacman -S --needed --noconfirm "${missing[@]}"
+
+    # Filter out packages that don't exist in the repos to avoid hard failures
+    local available=()
+    for pkg in "${missing[@]}"; do
+        if pacman -Si "$pkg" &>/dev/null; then
+            available+=("$pkg")
+        else
+            warn "Package not found in official repos (skipping): $pkg"
+        fi
+    done
+    [[ ${#available[@]} -eq 0 ]] && return 0
+
+    info "Installing packages: ${available[*]}"
+    sudo pacman -S --needed --noconfirm "${available[@]}"
 }
 
-# Installs one or more AUR packages
+# Installs one or more AUR packages via yay/paru (skips if no AUR helper).
 aur_install() {
     if [[ -z "$AUR_HELPER" ]]; then
-        warn "No AUR helper (yay/paru) found — skipping AUR package: $*"
+        warn "No AUR helper (yay/paru) found — skipping AUR package(s): $*"
         return 0
     fi
     local pkgs=("$@")
@@ -160,11 +173,14 @@ install_dependencies() {
     step "System dependencies"
     should_run "dependencies" || return 0
 
-    pacman_install git curl wget plank xfconf gtk-engine-murrine sassc
-    # Optionally install SF Pro equivalent fonts from AUR
-    if [[ -n "$AUR_HELPER" ]]; then
-        aur_install ttf-inter || warn "ttf-inter AUR install failed — will fall back to system sans-serif"
-    fi
+    # Official Arch/CachyOS repo packages
+    # gtk-engine-murrine is AUR-only on Arch; sassc is needed by WhiteSur's install script
+    pacman_install git curl wget plank sassc glib2 xfconf
+
+    # AUR packages (requires yay or paru)
+    # gtk-engine-murrine provides GTK-2 engine support for legacy apps
+    aur_install gtk-engine-murrine || warn "gtk-engine-murrine AUR install failed — GTK-2 apps may look unstyled"
+    aur_install ttf-inter           || warn "ttf-inter AUR install failed — falling back to system sans-serif"
 
     mark_installed "dependencies"
     success "Dependencies ready"
