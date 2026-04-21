@@ -91,15 +91,23 @@ mark_installed() {
     grep -qxF "$component" "$STATE_FILE" 2>/dev/null || echo "$component" >> "$STATE_FILE"
 }
 
-# Wrapper that respects --dry-run and --force
-should_run() {
-    local component="$1"
+# Guard: returns 1 (skip) if dry-run mode, or if the given filesystem
+# condition is already true and --force is not set.
+#
+# Usage:  guard "label" -d /some/dir    (any 'test' expression)
+#         guard "label"                 (no fs check — only skips in dry-run)
+#
+# When the condition is met and we skip, the component is marked as installed
+# so the state file stays consistent.
+guard() {
+    local component="$1"; shift  # remaining args are the 'test' expression
     if $DRY_RUN; then
-        info "[dry-run] Would install: $component"
-        return 1  # skip actual work
+        info "[dry-run] Would apply: $component"
+        return 1
     fi
-    if ! $FORCE && is_installed "$component"; then
-        info "Already installed (skip): $component — use --force to reinstall"
+    if [[ $# -gt 0 ]] && ! $FORCE && test "$@" 2>/dev/null; then
+        info "Already applied (skip): $component  [use --force to reapply]"
+        mark_installed "$component"
         return 1
     fi
     return 0
@@ -194,7 +202,8 @@ install_inter_font() {
 # ── 1. System dependencies ────────────────────────────────────────────────────
 install_dependencies() {
     step "System dependencies"
-    should_run "dependencies" || return 0
+    # Re-check every run: pacman_install is already idempotent (--needed flag)
+    guard "dependencies" || return 0
 
     # Official Arch/CachyOS repo packages
     # gtk-engine-murrine is AUR-only on Arch; sassc is needed by WhiteSur's install script
@@ -212,7 +221,8 @@ install_dependencies() {
 # ── 2. GTK theme (WhiteSur) ───────────────────────────────────────────────────
 install_gtk_theme() {
     step "GTK theme — WhiteSur"
-    should_run "gtk-theme" || return 0
+    # Idempotency: skip if the target theme directory already exists
+    guard "gtk-theme" -d "$THEMES_DIR/WhiteSur-${VARIANT^}" || return 0
 
     local dest="$TMP_DIR/WhiteSur-gtk-theme"
     info "Cloning WhiteSur GTK theme..."
@@ -235,7 +245,8 @@ install_gtk_theme() {
 # ── 3. Icon theme (WhiteSur) ──────────────────────────────────────────────────
 install_icons() {
     step "Icon theme — WhiteSur"
-    should_run "icons" || return 0
+    # Idempotency: skip if icon theme directory already exists
+    guard "icons" -d "$ICONS_DIR/WhiteSur" || return 0
 
     local dest="$TMP_DIR/WhiteSur-icon-theme"
     info "Cloning WhiteSur icon theme..."
@@ -251,17 +262,19 @@ install_icons() {
 # ── 4. Cursor theme (WhiteSur) ────────────────────────────────────────────────
 install_cursors() {
     step "Cursor theme — WhiteSur"
-    should_run "cursors" || return 0
+    # Idempotency: skip if cursor theme directory already exists
+    guard "cursors" -d "$ICONS_DIR/WhiteSur-cursors" || return 0
 
     local dest="$TMP_DIR/WhiteSur-cursors"
     info "Cloning WhiteSur cursor theme..."
     git clone --depth=1 "$CURSOR_THEME_REPO" "$dest"
 
     mkdir -p "$ICONS_DIR"
-    # Cursor themes live in ~/.icons/<name>
-    cp -r "$dest/dist/WhiteSur-cursors" "$ICONS_DIR/"
+    # The repo layout is: dist/index.theme + dist/cursors/
+    # Copy dist/ as the named theme directory
+    cp -rp "$dest/dist" "$ICONS_DIR/WhiteSur-cursors"
 
-    # Register default cursor via index.theme
+    # Register as the system default cursor
     local default_cursor="$ICONS_DIR/default"
     mkdir -p "$default_cursor"
     cat > "$default_cursor/index.theme" <<EOF
@@ -278,16 +291,16 @@ EOF
 # ── 5. Fonts ──────────────────────────────────────────────────────────────────
 install_fonts() {
     step "Fonts"
-    should_run "fonts" || return 0
+    # Idempotency: skip if Inter is already available system-wide
+    if ! $FORCE && fc-list 2>/dev/null | grep -qi "Inter"; then
+        info "Already applied (skip): fonts  [use --force to reapply]"
+        mark_installed "fonts"
+        return 0
+    fi
+    guard "fonts" || return 0
 
     mkdir -p "$FONTS_DIR"
-
-    # Try to install Inter from AUR (closest open-source to SF Pro)
-    if [[ -n "$AUR_HELPER" ]]; then
-        aur_install ttf-inter 2>/dev/null || true
-    fi
-
-    # Rebuild font cache
+    # Inter is installed via install_dependencies; rebuild cache so it's visible
     fc-cache -f "$FONTS_DIR"
 
     mark_installed "fonts"
@@ -297,32 +310,31 @@ install_fonts() {
 # ── 6. Wallpaper ──────────────────────────────────────────────────────────────
 install_wallpaper() {
     step "Wallpaper — macOS Sequoia"
-    should_run "wallpaper" || return 0
+
+    local filename
+    filename="sequoia-${VARIANT}.jpg"
+    local dest="$WALLPAPER_DIR/$filename"
+
+    # Idempotency: skip if wallpaper file already exists
+    guard "wallpaper" -f "$dest" || { WALLPAPER_PATH="$dest"; return 0; }
 
     mkdir -p "$WALLPAPER_DIR"
 
-    local url filename
+    local url
     if [[ "$VARIANT" == "dark" ]]; then
         url="$WALLPAPER_DARK_URL"
-        filename="sequoia-dark.jpg"
     else
         url="$WALLPAPER_URL"
-        filename="sequoia-light.jpg"
     fi
 
-    local dest="$WALLPAPER_DIR/$filename"
-
-    if [[ ! -f "$dest" ]] || $FORCE; then
-        info "Downloading macOS Sequoia wallpaper..."
-        if ! curl -fsSL --retry 3 -o "$dest" "$url"; then
-            warn "Primary wallpaper download failed — trying fallback..."
-            # Fallback: generate a simple gradient placeholder
-            if command -v convert &>/dev/null; then
-                if [[ "$VARIANT" == "dark" ]]; then
-                    convert -size 3840x2160 gradient:'#1a1a2e-#16213e' "$dest" 2>/dev/null || true
-                else
-                    convert -size 3840x2160 gradient:'#e8eaf6-#9fa8da' "$dest" 2>/dev/null || true
-                fi
+    info "Downloading macOS Sequoia wallpaper..."
+    if ! curl -fsSL --retry 3 -o "$dest" "$url"; then
+        warn "Primary wallpaper download failed — trying fallback..."
+        if command -v convert &>/dev/null; then
+            if [[ "$VARIANT" == "dark" ]]; then
+                convert -size 3840x2160 gradient:'#1a1a2e-#16213e' "$dest" 2>/dev/null || true
+            else
+                convert -size 3840x2160 gradient:'#e8eaf6-#9fa8da' "$dest" 2>/dev/null || true
             fi
         fi
     fi
@@ -335,7 +347,8 @@ install_wallpaper() {
 # ── 7. Plank dock ─────────────────────────────────────────────────────────────
 configure_plank() {
     step "Plank dock"
-    should_run "plank" || return 0
+    # Idempotency: skip if settings file already exists
+    guard "plank" -f "$HOME/.config/plank/dock1/settings" || return 0
 
     # Write Plank preferences via dconf (if available) or direct config file
     local plank_conf_dir="$HOME/.config/plank/dock1"
@@ -410,13 +423,25 @@ EOF
 # ── 8. XFCE settings via xfconf-query ────────────────────────────────────────
 apply_xfce_settings() {
     step "XFCE settings"
-    should_run "xfce-settings" || return 0
+    # xfconf-query --create is idempotent by nature; guard only skips in dry-run
+    # or when the theme is already correctly set.
+    local expected_theme="WhiteSur-${VARIANT^}"
+    local current_theme
+    current_theme=$(xfconf-query -c xsettings -p /Net/ThemeName 2>/dev/null || true)
+    guard "xfce-settings" -n "${current_theme}" || return 0
+    [[ "$current_theme" == "$expected_theme" ]] && ! $FORCE && {
+        info "Already applied (skip): xfce-settings  [use --force to reapply]"
+        mark_installed "xfce-settings"
+        return 0
+    }
 
-    # Backup current settings
-    mkdir -p "$BACKUP_DIR"
-    xfconf-query -c xsettings -l 2>/dev/null > "$BACKUP_DIR/xsettings.txt" || true
-    xfconf-query -c xfwm4    -l 2>/dev/null > "$BACKUP_DIR/xfwm4.txt"    || true
-    xfconf-query -c xfce4-desktop -l 2>/dev/null > "$BACKUP_DIR/xfce4-desktop.txt" || true
+    # Backup current settings (only on first application)
+    if [[ ! -f "$BACKUP_DIR/xsettings.txt" ]]; then
+        mkdir -p "$BACKUP_DIR"
+        xfconf-query -c xsettings    -l 2>/dev/null > "$BACKUP_DIR/xsettings.txt"    || true
+        xfconf-query -c xfwm4        -l 2>/dev/null > "$BACKUP_DIR/xfwm4.txt"        || true
+        xfconf-query -c xfce4-desktop -l 2>/dev/null > "$BACKUP_DIR/xfce4-desktop.txt" || true
+    fi
 
     local gtk_theme icon_theme font_name wm_theme cursor_theme
 
@@ -431,32 +456,31 @@ apply_xfce_settings() {
     cursor_theme="WhiteSur-cursors"
 
     # Detect best available font
-    if fc-list | grep -qi "Inter"; then
+    if fc-list 2>/dev/null | grep -qi "Inter"; then
         font_name="Inter Regular 13"
-    elif fc-list | grep -qi "SF Pro"; then
+    elif fc-list 2>/dev/null | grep -qi "SF Pro"; then
         font_name="SF Pro Display Regular 13"
     else
         font_name="Sans Regular 13"
     fi
 
     info "Applying GTK theme: $gtk_theme"
-    xfconf-query -c xsettings -p /Net/ThemeName         -s "$gtk_theme"     --create -t string
-    xfconf-query -c xsettings -p /Net/IconThemeName      -s "$icon_theme"    --create -t string
-    xfconf-query -c xsettings -p /Gtk/CursorThemeName    -s "$cursor_theme"  --create -t string
-    xfconf-query -c xsettings -p /Gtk/CursorThemeSize    -s 24               --create -t int
-    xfconf-query -c xsettings -p /Gtk/FontName           -s "$font_name"     --create -t string
-    xfconf-query -c xsettings -p /Gtk/MonospaceFontName  -s "Monospace Regular 12" --create -t string
-    xfconf-query -c xsettings -p /Xft/Antialias          -s 1                --create -t int
-    xfconf-query -c xsettings -p /Xft/Hinting            -s 1                --create -t int
-    xfconf-query -c xsettings -p /Xft/HintStyle          -s "hintslight"     --create -t string
-    xfconf-query -c xsettings -p /Xft/RGBA               -s "rgb"            --create -t string
+    xfconf-query -c xsettings -p /Net/ThemeName        -s "$gtk_theme"           --create -t string
+    xfconf-query -c xsettings -p /Net/IconThemeName     -s "$icon_theme"          --create -t string
+    xfconf-query -c xsettings -p /Gtk/CursorThemeName   -s "$cursor_theme"        --create -t string
+    xfconf-query -c xsettings -p /Gtk/CursorThemeSize   -s 24                     --create -t int
+    xfconf-query -c xsettings -p /Gtk/FontName          -s "$font_name"           --create -t string
+    xfconf-query -c xsettings -p /Gtk/MonospaceFontName -s "Monospace Regular 12" --create -t string
+    xfconf-query -c xsettings -p /Xft/Antialias         -s 1                      --create -t int
+    xfconf-query -c xsettings -p /Xft/Hinting           -s 1                      --create -t int
+    xfconf-query -c xsettings -p /Xft/HintStyle         -s "hintslight"           --create -t string
+    xfconf-query -c xsettings -p /Xft/RGBA              -s "rgb"                  --create -t string
 
     info "Applying window manager theme: $wm_theme"
-    xfconf-query -c xfwm4 -p /general/theme              -s "$wm_theme"      --create -t string
-    xfconf-query -c xfwm4 -p /general/title_font         -s "$font_name"     --create -t string
-    xfconf-query -c xfwm4 -p /general/button_layout      -s "C|HM"           --create -t string
-    # Buttons on the left (macOS style: close/min/max on left)
-    xfconf-query -c xfwm4 -p /general/button_layout      -s "CMH|"           --create -t string
+    xfconf-query -c xfwm4 -p /general/theme         -s "$wm_theme" --create -t string
+    xfconf-query -c xfwm4 -p /general/title_font    -s "$font_name" --create -t string
+    # macOS style: close/min/max buttons on the left
+    xfconf-query -c xfwm4 -p /general/button_layout -s "CMH|" --create -t string
 
     # Wallpaper — iterate over all monitors and workspaces
     if [[ -n "${WALLPAPER_PATH:-}" && -f "${WALLPAPER_PATH:-}" ]]; then
@@ -465,24 +489,21 @@ apply_xfce_settings() {
         for screen_prop in $(xfconf-query -c xfce4-desktop -l 2>/dev/null | grep "last-image" || true); do
             xfconf-query -c xfce4-desktop -p "$screen_prop" -s "$WALLPAPER_PATH" --create -t string
         done
-        # Also set via common default path
-        xfconf-query -c xfce4-desktop \
-            -p /backdrop/screen0/monitorVirtual1/workspace0/last-image \
-            -s "$WALLPAPER_PATH" --create -t string 2>/dev/null || true
-        xfconf-query -c xfce4-desktop \
-            -p /backdrop/screen0/monitor0/workspace0/last-image \
-            -s "$WALLPAPER_PATH" --create -t string 2>/dev/null || true
-        xfconf-query -c xfce4-desktop \
-            -p /backdrop/screen0/monitorHDMI-1/workspace0/last-image \
-            -s "$WALLPAPER_PATH" --create -t string 2>/dev/null || true
+        # Common monitor property paths
+        for monitor_path in \
+            /backdrop/screen0/monitorVirtual1/workspace0/last-image \
+            /backdrop/screen0/monitor0/workspace0/last-image \
+            /backdrop/screen0/monitorHDMI-1/workspace0/last-image; do
+            xfconf-query -c xfce4-desktop -p "$monitor_path" \
+                -s "$WALLPAPER_PATH" --create -t string 2>/dev/null || true
+        done
     fi
 
     # Compositor — enable for smooth macOS feel
-    xfconf-query -c xfwm4 -p /general/use_compositing      -s true  --create -t bool
-    xfconf-query -c xfwm4 -p /general/frame_opacity         -s 85    --create -t int
-    xfconf-query -c xfwm4 -p /general/inactive_opacity      -s 95    --create -t int
+    xfconf-query -c xfwm4 -p /general/use_compositing -s true --create -t bool
+    xfconf-query -c xfwm4 -p /general/frame_opacity   -s 85   --create -t int
+    xfconf-query -c xfwm4 -p /general/inactive_opacity -s 95  --create -t int
 
-    # Taskbar / Panel: move panel to top (macOS menu-bar style)
     configure_xfce_panel
 
     mark_installed "xfce-settings"
@@ -509,7 +530,13 @@ configure_xfce_panel() {
 # ── 9. GTK-2 compatibility ────────────────────────────────────────────────────
 configure_gtk2() {
     step "GTK-2 compatibility"
-    should_run "gtk2" || return 0
+    # Idempotency: skip if config already references WhiteSur
+    if ! $FORCE && grep -q "WhiteSur" "$HOME/.gtkrc-2.0" 2>/dev/null; then
+        info "Already applied (skip): gtk2  [use --force to reapply]"
+        mark_installed "gtk2"
+        return 0
+    fi
+    guard "gtk2" || return 0
 
     local gtk2_conf="$HOME/.gtkrc-2.0"
     if [[ "$VARIANT" == "dark" ]]; then
