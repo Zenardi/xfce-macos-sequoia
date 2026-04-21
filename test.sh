@@ -392,6 +392,22 @@ check_browser_theme() {
     fi
 }
 
+check_rofi() {
+    section "Rofi Spotlight launcher"
+    assert_cmd rofi
+    assert_file "$HOME/.config/rofi/config.rasi"    "rofi config.rasi"
+    assert_file "$HOME/.config/rofi/spotlight.rasi" "rofi spotlight.rasi"
+
+    local shortcut
+    shortcut=$(xfconf-query -c xfce4-keyboard-shortcuts \
+        -p "/commands/custom/<Super>space" 2>/dev/null || echo "")
+    if [[ "$shortcut" == *"rofi"* ]]; then
+        pass "Keyboard shortcut: Super+Space → $shortcut"
+    else
+        fail "Super+Space shortcut not set to rofi (got: '${shortcut:-<unset>}')"
+    fi
+}
+
 check_login_screen() {
     section "Login screen (LightDM)"
     local marker="/etc/lightdm/.xfce-macos-theme"
@@ -466,6 +482,7 @@ main() {
     check_autostart
     check_battery
     check_browser_theme
+    check_rofi
     check_login_screen
     check_xfce_settings
     check_gtk_config_files

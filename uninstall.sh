@@ -184,6 +184,20 @@ remove_browser_theme() {
     fi
 }
 
+remove_rofi_config() {
+    step "Removing rofi Spotlight launcher"
+    if [[ -f "$HOME/.config/rofi/config.rasi" ]]; then
+        run rm -f "$HOME/.config/rofi/config.rasi"
+        run rm -f "$HOME/.config/rofi/spotlight.rasi"
+        success "Removed rofi config"
+    fi
+    # Remove XFCE keyboard shortcuts
+    xfconf-query -c xfce4-keyboard-shortcuts \
+        -p "/commands/custom/<Super>space" -r 2>/dev/null || true
+    xfconf-query -c xfce4-keyboard-shortcuts \
+        -p "/commands/custom/<Super><Shift>space" -r 2>/dev/null || true
+}
+
 restore_login_screen() {
     step "Restoring login screen (LightDM)"
     local marker="/etc/lightdm/.xfce-macos-theme"
@@ -268,6 +282,7 @@ main() {
     remove_picom_config
     remove_nm_applet_autostart
     remove_browser_theme
+    remove_rofi_config
     restore_login_screen
     remove_state
 

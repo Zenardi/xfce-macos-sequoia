@@ -243,7 +243,7 @@ install_dependencies() {
     pacman_install git curl wget plank sassc glib2 xfconf \
         xfce4-whiskermenu-plugin xfce4-statusnotifier-plugin \
         xfce4-pulseaudio-plugin xfce4-power-manager network-manager-applet \
-        picom
+        picom rofi
 
     # AUR packages (requires yay or paru)
     # gtk-engine-murrine provides GTK-2 engine support for legacy apps
@@ -1118,7 +1118,151 @@ EOF
     success "nm-applet autostart configured"
 }
 
-# ── 11. Login screen (LightDM) ────────────────────────────────────────────────
+# ── 12. Rofi Spotlight launcher ───────────────────────────────────────────────
+# Installs rofi and themes it to look like macOS Spotlight: centred panel,
+# blurred background, rounded corners, Inter font, WhiteSur colours.
+# Bound to Super+Space (same position as macOS Command+Space) via XFCE shortcuts.
+configure_rofi() {
+    step "Rofi Spotlight launcher (Super+Space)"
+    local rofi_dir="$HOME/.config/rofi"
+    local conf="$rofi_dir/config.rasi"
+    guard "rofi" -f "$conf" || return 0
+
+    mkdir -p "$rofi_dir"
+
+    # Choose colours based on dark/light variant
+    local bg_colour icon_fg sel_bg sel_fg txt_fg
+    if [[ "$VARIANT" == "dark" ]]; then
+        bg_colour="#1e1e1e"
+        txt_fg="#f0f0f0"
+        sel_bg="#3d7aed"
+        sel_fg="#ffffff"
+        icon_fg="#ababab"
+    else
+        bg_colour="#f5f5f7"
+        txt_fg="#1d1d1f"
+        sel_bg="#0071e3"
+        sel_fg="#ffffff"
+        icon_fg="#555555"
+    fi
+
+    # Write the rofi theme file (macOS Spotlight style)
+    cat > "$rofi_dir/spotlight.rasi" <<EOF
+/* xfce-macos-theme: Spotlight-style rofi theme */
+* {
+    font:            "Inter Regular 14";
+    background:      ${bg_colour}e6;   /* ~90% opacity */
+    background-alt:  ${bg_colour}cc;
+    foreground:      ${txt_fg};
+    selected-bg:     ${sel_bg};
+    selected-fg:     ${sel_fg};
+    border-colour:   ${icon_fg}44;
+}
+
+window {
+    transparency:        "real";
+    width:               640px;
+    border-radius:       12px;
+    border:              1px solid @border-colour;
+    background-color:    @background;
+    padding:             8px;
+    x-offset:           0;
+    y-offset:           -80px;   /* slightly above center — Spotlight position */
+    location:            center;
+}
+
+mainbox {
+    background-color:   transparent;
+    children:           [ inputbar, listview ];
+    spacing:            6px;
+}
+
+inputbar {
+    background-color:   transparent;
+    border-radius:       8px;
+    padding:             6px 12px;
+    spacing:             8px;
+    children:            [ prompt, entry ];
+}
+
+prompt {
+    background-color:   transparent;
+    text-color:         @foreground;
+    padding:            4px 0;
+}
+
+entry {
+    background-color:   transparent;
+    text-color:         @foreground;
+    placeholder-color:  ${icon_fg};
+    placeholder:        "Search apps, files, commands…";
+    cursor:             text;
+}
+
+listview {
+    background-color:   transparent;
+    columns:            1;
+    lines:              8;
+    scrollbar:          false;
+    spacing:            2px;
+}
+
+element {
+    background-color:   transparent;
+    border-radius:       6px;
+    padding:             8px 12px;
+    spacing:             10px;
+    children:            [ element-icon, element-text ];
+}
+
+element selected.normal {
+    background-color:   @selected-bg;
+    text-color:         @selected-fg;
+}
+
+element-icon {
+    size:               24px;
+    vertical-align:     0.5;
+}
+
+element-text {
+    text-color:         inherit;
+    vertical-align:     0.5;
+}
+EOF
+
+    # Main rofi config — use drun (app launcher) as default mode
+    cat > "$conf" <<EOF
+configuration {
+    modi:           "drun,run,window";
+    show-icons:     true;
+    drun-display-format: "{name}";
+    display-drun:   "  Apps";
+    display-run:    "  Run";
+    display-window: "  Windows";
+    terminal:       "xfce4-terminal";
+    icon-theme:     "WhiteSur";
+    sidebar-mode:   false;
+}
+
+@theme "$rofi_dir/spotlight.rasi"
+EOF
+
+    # Bind Super+Space in XFCE keyboard shortcuts (mirrors Command+Space on macOS)
+    xfconf-query -c xfce4-keyboard-shortcuts \
+        -p "/commands/custom/<Super>space" \
+        -s "rofi -show drun" --create -t string 2>/dev/null || true
+
+    # Also bind Super+Shift+Space for window switcher (like macOS Exposé)
+    xfconf-query -c xfce4-keyboard-shortcuts \
+        -p "/commands/custom/<Super><Shift>space" \
+        -s "rofi -show window" --create -t string 2>/dev/null || true
+
+    mark_installed "rofi"
+    success "Rofi Spotlight launcher configured — press Super+Space to launch"
+}
+
+# ── 13. Login screen (LightDM) ────────────────────────────────────────────────
 configure_login_screen() {
     step "Login screen (LightDM)"
     # Idempotency: check if we've already configured it
@@ -1229,6 +1373,7 @@ print_summary() {
     echo "  Top Panel    : macOS-style (24px, 8-plugin, frosted-glass)"
     echo "  Compositor   : picom (dual_kawase blur + shadows)"
     echo "  Browser      : GTK_THEME exported — Firefox chrome theme applied"
+    echo "  Spotlight    : rofi (Super+Space) — macOS-style app launcher"
     echo "  Wi-Fi tray   : nm-applet (autostart configured)"
     echo "  Login Screen : LightDM — macOS wallpaper + WhiteSur theme"
     echo
@@ -1266,6 +1411,7 @@ main() {
     configure_browser_theme
     configure_picom
     configure_autostart
+    configure_rofi
     configure_login_screen
 
     print_summary
