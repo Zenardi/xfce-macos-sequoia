@@ -411,6 +411,12 @@ Launcher=file:///usr/share/applications/${app}.desktop
 EOF
     done
 
+    # Trash dockitem — uses Plank's built-in trash:// URI (shows fill level)
+    cat > "$plank_conf_dir/launchers/trash.dockitem" <<'EOF'
+[PlankDockItemPreferences]
+Launcher=trash://
+EOF
+
     # Add Plank to XFCE autostart
     local autostart_dir="$HOME/.config/autostart"
     mkdir -p "$autostart_dir"
@@ -524,6 +530,12 @@ apply_xfce_settings() {
 
     configure_xfce_panel
 
+    # Hide Trash (and Home) from the desktop — they live in the Plank dock
+    xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-trash \
+        -s false --create -t bool 2>/dev/null || true
+    xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-home \
+        -s false --create -t bool 2>/dev/null || true
+
     # Write XML channel files directly as a reliable on-disk fallback.
     # xfconf-query talks to xfconfd via DBUS (live updates), but the XML files
     # are what XFCE reads on next login. Writing both guarantees persistence.
@@ -583,30 +595,33 @@ EOF
 </channel>
 EOF
 
-    # Write wallpaper setting if available
-    if [[ -n "${WALLPAPER_PATH:-}" && -f "${WALLPAPER_PATH:-}" ]]; then
-        cat > "$xfconf_dir/xfce4-desktop.xml" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<channel name="xfce4-desktop" version="1.0">
-  <property name="backdrop" type="empty">
-    <property name="screen0" type="empty">
-      <property name="monitor0" type="empty">
-        <property name="workspace0" type="empty">
-          <property name="last-image" type="string" value="$WALLPAPER_PATH"/>
-          <property name="image-style" type="int" value="5"/>
-        </property>
-      </property>
-      <property name="monitorVirtual1" type="empty">
-        <property name="workspace0" type="empty">
-          <property name="last-image" type="string" value="$WALLPAPER_PATH"/>
-          <property name="image-style" type="int" value="5"/>
-        </property>
-      </property>
-    </property>
-  </property>
-</channel>
-EOF
-    fi
+    # Write wallpaper + desktop-icon settings
+    {
+        echo '<?xml version="1.0" encoding="UTF-8"?>'
+        echo '<channel name="xfce4-desktop" version="1.0">'
+        if [[ -n "${WALLPAPER_PATH:-}" && -f "${WALLPAPER_PATH:-}" ]]; then
+            echo '  <property name="backdrop" type="empty">'
+            echo '    <property name="screen0" type="empty">'
+            for mon in Virtual1 monitor0 HDMI-1 eDP-1; do
+                echo "      <property name=\"monitor${mon}\" type=\"empty\">"
+                echo '        <property name="workspace0" type="empty">'
+                echo "          <property name=\"last-image\" type=\"string\" value=\"${WALLPAPER_PATH}\"/>"
+                echo '          <property name="image-style" type="int" value="5"/>'
+                echo '        </property>'
+                echo '      </property>'
+            done
+            echo '    </property>'
+            echo '  </property>'
+        fi
+        # Hide Trash and Home from desktop (they live in the Plank dock)
+        echo '  <property name="desktop-icons" type="empty">'
+        echo '    <property name="file-icons" type="empty">'
+        echo '      <property name="show-trash" type="bool" value="false"/>'
+        echo '      <property name="show-home" type="bool" value="false"/>'
+        echo '    </property>'
+        echo '  </property>'
+        echo '</channel>'
+    } > "$xfconf_dir/xfce4-desktop.xml"
 }
 
 # Signal running XFCE session daemons to reload configuration without logout.
