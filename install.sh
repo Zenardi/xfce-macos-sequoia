@@ -371,7 +371,7 @@ CurrentWorkspaceOnly=false
 #! The size of dock icons (in pixels).
 IconSize=48
 #! If 0, the dock is visible; if 1, it auto-hides; if 2, it intellihides.
-HideMode=1
+HideMode=0
 #! Time to wait before hiding the dock.
 UnhideDelay=0
 #! Time to wait before hiding the dock.
@@ -489,20 +489,36 @@ apply_xfce_settings() {
     xfconf-query -c xfwm4 -p /general/frame_opacity    -s 85           --create -t int
     xfconf-query -c xfwm4 -p /general/inactive_opacity -s 95           --create -t int
 
-    # Wallpaper — set on every known monitor/workspace property path
+    # Wallpaper — detect real monitor names, set on every workspace property
     if [[ -n "${WALLPAPER_PATH:-}" && -f "${WALLPAPER_PATH:-}" ]]; then
         info "Setting wallpaper: $WALLPAPER_PATH"
-        local screen_prop
-        for screen_prop in $(xfconf-query -c xfce4-desktop -l 2>/dev/null | grep "last-image" || true); do
+
+        # Discover connected monitor names (e.g. eDP-1, HDMI-A-1, Virtual1)
+        local detected_monitors=()
+        if command -v xrandr &>/dev/null && [[ -n "${DISPLAY:-}" ]]; then
+            while IFS= read -r mon; do
+                detected_monitors+=("$mon")
+            done < <(xrandr --listmonitors 2>/dev/null | awk 'NR>1{print $NF}' || true)
+        fi
+        # Always include common fallback names so the XML covers fresh sessions too
+        local all_monitors=("${detected_monitors[@]}" "Virtual1" "monitor0" "HDMI-1" "eDP-1")
+
+        # Update any already-existing last-image properties (handles custom paths)
+        while IFS= read -r screen_prop; do
             xfconf-query -c xfce4-desktop -p "$screen_prop" \
-                -s "$WALLPAPER_PATH" --create -t string
-        done
-        for monitor_path in \
-            /backdrop/screen0/monitorVirtual1/workspace0/last-image \
-            /backdrop/screen0/monitor0/workspace0/last-image \
-            /backdrop/screen0/monitorHDMI-1/workspace0/last-image; do
-            xfconf-query -c xfce4-desktop -p "$monitor_path" \
                 -s "$WALLPAPER_PATH" --create -t string 2>/dev/null || true
+        done < <(xfconf-query -c xfce4-desktop -l 2>/dev/null | grep "last-image" || true)
+
+        # Create/update properties for every monitor name we know about
+        for mon in "${all_monitors[@]}"; do
+            for ws in 0 1; do
+                xfconf-query -c xfce4-desktop \
+                    -p "/backdrop/screen0/monitor${mon}/workspace${ws}/last-image" \
+                    -s "$WALLPAPER_PATH" --create -t string 2>/dev/null || true
+                xfconf-query -c xfce4-desktop \
+                    -p "/backdrop/screen0/monitor${mon}/workspace${ws}/image-style" \
+                    -s 5 --create -t int 2>/dev/null || true
+            done
         done
     fi
 
